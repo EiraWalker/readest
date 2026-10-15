@@ -2,7 +2,7 @@
 
 ## 结果与修复
 
-Windows Tauri debug/no-bundle 构建成功，独立程序的实际系统剪贴板验收通过。手工交接到 ChatGPT Desktop 尚未执行，Issue 保持开启。
+Windows Tauri debug/no-bundle 构建成功，独立程序的实际系统剪贴板验收通过。后续 forks、threads 全量复跑仍存在尚未解决的启动超时，**完整自动验证未通过**；手工交接到 ChatGPT Desktop 尚未执行，Issue 保持开启。
 
 测试开始时，Tauri 剪贴板插件和独立 Win32 `OpenClipboard` 均拒绝访问，但 WebView2 的浏览器回退可能返回成功。原实现因此显示成功并清除选区。修复既有 `writeTextToClipboard` 原生分支：原生插件失败即返回 false，不再尝试可能假成功的 WebView 回退。Web 分支保持原行为；没有增加权限、原生能力或配置项。
 
@@ -45,21 +45,38 @@ git diff --check
 | 原生失败/WebView 假成功回归 | 修复前红，修复后绿 |
 | 三个相关文件 | 55 项通过 |
 | 全量单测 | 1,154 个文件通过、4 个跳过；13,667 项通过、16 项跳过；1,022.76 秒 |
+| 后续相同受限参数的 forks 全量复跑 | 1,147 个文件通过、1 失败、4 跳过；13,287 项通过、1 失败、16 跳过；另有 6 个 worker 启动错误；1,423.05 秒，**未通过** |
+| 受影响 7 文件，forks / 2 worker / 15 秒 | 5 文件通过、2 失败；369 项通过、1 失败、10 跳过；135.88 秒，**未通过** |
+| 同一组 7 文件仅改为 threads | 7 文件、380 项通过，23.71 秒；仅为分组对照，不代替全量 |
+| 完整 threads / 2 worker / 15 秒 | 1,151 个文件通过、4 跳过；13,624 项通过、16 跳过；另有 3 个 worker 启动错误，2,525.12 秒，退出 1，**未通过** |
+| 最后补查：上述 3 个未启动文件及功能相关 3 文件 | 6 文件、98 项通过，55.58 秒；仅为补查，不替代全量 |
 | `pnpm lint` | TypeScript 通过，Biome 检查 2,792 个文件通过 |
 | 首次原生构建 | 前端编译、类型检查和导出通过；Rust 24 分 01 秒，退出码 0 |
 | 含修复的原生构建 | 前端编译、类型检查和导出通过；Rust 4 分 10 秒，退出码 0 |
 | 还原临时配置后的测试 | 5 项通过 |
 | 最终两个 TS 文件的 Biome 检查 | 通过，无自动修复 |
 
-默认推送钩子随后再次运行了无参数的全量测试，`library-search-ssr.test.ts` 的 `imports without browser globals` 在 5,015 ms 超时；该轮已中断，**没有计为通过**。原因尚未确认，已独立记录为 [Issue #3](https://github.com/EiraWalker/readest/issues/3)。不以受限参数下通过代替默认参数通过，也没有改动该 SSR 测试、Vitest 配置或仓库钩子。
+默认推送钩子随后再次运行了无参数的全量测试，`library-search-ssr.test.ts` 的 `imports without browser globals` 在 5,015 ms 超时；该轮已中断，**没有计为通过**。改用此前已通过的 2 worker / 15 秒参数，仍有 SSR 导入超时及 6 个 forks worker 启动错误，推送被阻止。缩小到 7 文件后，另观察到 PDF `beforeAll` 的 30 秒超时；单独 SSR 在 2.28 秒通过，也不能覆盖整套失败。
 
-本次推送采用一次性的本地 `core.hooksPath`，仍顺序执行仓库要求的三项检查，仅为全量测试加上本机已使用的资源及超时参数；该 hook 和配置不提交：
+原因尚未确认，已独立记录为 [Issue #3](https://github.com/EiraWalker/readest/issues/3)。当时可用物理内存约 1.8 GB，冷缓存、负载和 worker 类型可能共同影响结果；没有证据可以单独归因于其中一项。没有改动 SSR/PDF 测试、Vitest 配置或仓库钩子，也没有把分组或首轮通过写成后续全量通过。
+
+在保持 2 worker / 15 秒预算时，仅将上述 7 文件的 pool 改为 threads，380 项通过；随后执行完整线程池验证，命令如下：
 
 ```sh
-pnpm -C apps/readest-app format:check
-pnpm -C apps/readest-app lint
-pnpm -C apps/readest-app test --run --maxWorkers=2 --testTimeout=15000 --reporter=dot
+pnpm test --run --pool=threads --maxWorkers=2 --testTimeout=15000 --reporter=verbose
 ```
+
+测试期间没有改变生产源码。最终交付文档的更新与功能代码分开检查；推送方式和最终结果以本记录及 Issue 的最新交付评论为准，临时 hook/配置不提交。
+
+完整 threads 运行没有测试断言失败，但 `services/book-content-source.test.ts`、`android/themed-icon.test.ts`、`services/sync/cloudSyncProvider.test.ts` 未能启动，错误仍为 `Timeout waiting for worker to respond`。**不能将 13,624 项通过当成完整通过，也不能把随后单独补查的结果加总成一轮全量通过。**
+
+最后补查的实际命令：
+
+```powershell
+pnpm test --run src/__tests__/services/book-content-source.test.ts src/__tests__/android/themed-icon.test.ts src/__tests__/services/sync/cloudSyncProvider.test.ts src/__tests__/components/annotator/CopyExplanationPrompt.test.tsx src/__tests__/utils/annotationToolbar.test.ts src/__tests__/components/settings/AnnotationToolbarCustomizerEink.test.tsx --pool=threads --maxWorkers=2 --testTimeout=15000 --reporter=verbose
+```
+
+本轮按“验收未完成时保持 Issue 开启、仍提交推送交接分支”的授权交付已有工作。由于完整门禁未通过，交接推送使用一次性的本地 hook 覆盖：仅允许此工作分支，核对功能源码/测试/配置相对受测提交未改变，重新执行格式与 lint，并明确输出完整验证仍失败的状态；不再重复运行失败的全量门禁。仓库自身钩子和配置不变。该推送不表示验收完成；Issue #2/#3 均保持开启，未合并。
 
 验收 EXE SHA256：`A0EE032F8062B68585669DD3D88B7597123887B00F71079547CFB5065C74F05C`。这是未经 release 优化、签名和安装包封装的 debug 程序。
 

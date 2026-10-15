@@ -6,12 +6,12 @@
 
 功能代码已实现，分支为 `feat/issue-2-copy-explanation-prompt`，起点为 `9fd7a4820`。
 本轮从 `be21fe8f6` 继续，已完成 Windows Tauri debug/no-bundle 构建和独立程序、独立书库的原生验收。
-原生验收发现并修复了“系统剪贴板拒绝访问时，WebView 回退仍可能报告成功”的问题；新增回归测试后，全量单测、类型检查和 Biome 均通过。
+原生验收发现并修复了“系统剪贴板拒绝访问时，WebView 回退仍可能报告成功”的问题；新增回归测试后，首轮全量单测、类型检查和 Biome 均通过。
 EPUB/PDF 实际系统剪贴板、跨页、失败保留与重试、异步改选、键盘、工具栏持久化、离线及无笔记副作用均已核对。
 本轮详细命令、验证方法、输出样本及截图见 [Windows 验收记录](issue-2/windows-validation.md)。
 此前 Web 生产构建和 Web 实际交互验证已通过；本轮修复只改变原生失败分支，Web 分支未改动。
-默认推送钩子的无参数全量测试曾发生一项 5 秒超时，已记录为 [Issue #3](https://github.com/EiraWalker/readest/issues/3)，不计为通过；完整受限命令的通过结果与推送检查方法见 Windows 验收记录。
-尚待使用者自行粘贴到 ChatGPT Desktop 核对，Issue 保持开启；未合并或发布安装包。
+默认推送钩子及后续受限 forks 全量复跑出现导入/worker 超时，均不计为通过，已记录为 [Issue #3](https://github.com/EiraWalker/readest/issues/3)。完整 threads 复跑也因 3 个 worker 未启动而退出 1；各轮结果及交接推送方法见 Windows 验收记录，不能用首轮通过或分组通过覆盖后续失败。
+尚待解决完整自动验证的启动超时，并由使用者自行粘贴到 ChatGPT Desktop 核对。交接分支已按未完成状态记录，Issue 保持开启；未合并或发布安装包。
 
 ## 使用与实现
 
@@ -45,8 +45,10 @@ EPUB/PDF 实际系统剪贴板、跨页、失败保留与重试、异步改选�
 
 | 检查 | 结果 |
 | --- | --- |
-| `pnpm test --run --maxWorkers=2 --testTimeout=15000 --reporter=dot` | 1,154 个文件通过，4 个跳过；13,667 项测试通过，16 项跳过 |
+| `pnpm test --run --maxWorkers=2 --testTimeout=15000 --reporter=dot` | 首轮 1,154 个文件通过，4 个跳过；13,667 项测试通过，16 项跳过；后续相同参数复跑未通过，见 Issue #3 |
+| `pnpm test --run --pool=threads --maxWorkers=2 --testTimeout=15000 --reporter=verbose` | 1,151 个文件、13,624 项通过；4 文件、16 项跳过；另有 3 个 worker 启动错误，退出 1，未通过 |
 | 下列 3 个相关测试文件 | 55 项通过 |
+| 最后补查：相关测试 + threads 未启动的 3 文件 | 6 文件、98 项通过；不加总为一轮全量通过 |
 | `pnpm lint` | TypeScript 与 Biome 通过 |
 | `pnpm tauri build --debug --no-bundle --config <本地隔离配置>` | Windows 构建通过；包含 Next.js 编译、类型检查、静态导出及 Rust 编译 |
 | `pnpm --filter @readest/readest-app build-web` | 上一提交的 Web 生产构建通过，本轮未重跑 |
@@ -116,9 +118,10 @@ $env:CIRCLE_NODE_TOTAL='3'
 
 ## 剩余交接
 
-1. 使用独立测试程序，划选 Alice EPUB 或 PDF 的文字，点击“复制解释提示词”。
-2. 由使用者自行切换到 ChatGPT Desktop 粘贴，核对中文任务、完整原文、书名、作者、章节或文档页序号与选区一致，再自行决定发送。
-3. 把人工交接结果补充到 Issue #2，由维护者决定合并及关闭 Issue。
+1. 按 Issue #3 继续定位全量运行的导入/worker 启动超时；在稳定环境中完成整套自动检查。当前不满足“所有适用检查通过”的完成条件。
+2. 使用独立测试程序，划选 Alice EPUB 或 PDF 的文字，点击“复制解释提示词”。
+3. 由使用者自行切换到 ChatGPT Desktop 粘贴，核对中文任务、完整原文、书名、作者、章节或文档页序号与选区一致，再自行决定发送。
+4. 把完整自动检查及人工交接结果补充到 Issue #2，由维护者决定合并及关闭 Issue。
 
 没有自动启动、控制 ChatGPT Desktop、粘贴或发送。release 优化构建、签名及安装包未执行；本轮验收对象是独立的 Windows debug 可执行程序。
 
