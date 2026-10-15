@@ -1,0 +1,278 @@
+[
+  {
+    "name": "optional-toolbar-default",
+    "passed": true,
+    "details": {
+      "available": true,
+      "quickActionAbsent": true
+    }
+  },
+  {
+    "name": "native-failure-retains-selection",
+    "passed": true,
+    "details": {
+      "activation": "Enter",
+      "errorToast": true,
+      "successToast": false,
+      "selectionPreserved": true,
+      "method": "real rejected native write",
+      "systemClipboardSuccess": "blocked"
+    }
+  },
+  {
+    "name": "native-epub-source-arguments",
+    "passed": true,
+    "details": {
+      "method": "native IPC text before actual write",
+      "title": true,
+      "author": true,
+      "nestedChapter": "Section A.1",
+      "screenProgress": "Section A.2",
+      "cfi": true,
+      "link": true,
+      "fullText": true,
+      "clipboardWrite": "blocked"
+    }
+  },
+  {
+    "name": "native-failure-retry",
+    "passed": true,
+    "details": {
+      "sameSelection": true,
+      "secondActualNativeAttempt": true,
+      "errorToast": true
+    }
+  },
+  {
+    "name": "native-async-reselection",
+    "passed": true,
+    "details": {
+      "method": "pause real native IPC after snapshot A; select B; resume",
+      "copiedPayload": "A",
+      "preservedSelection": "B",
+      "nativeResult": "failure"
+    }
+  },
+  {
+    "name": "native-multiline-source-arguments",
+    "passed": true,
+    "details": {
+      "method": "DOM Range text compared with native IPC",
+      "indentation": true,
+      "newlines": true,
+      "trailingNewline": true,
+      "completeText": true,
+      "clipboardWrite": "blocked"
+    }
+  },
+  {
+    "name": "native-notebook-side-effects",
+    "passed": true,
+    "details": {
+      "copyToNotebookEnabled": true,
+      "ordinaryCopyCreatedExcerpt": true,
+      "countBeforeExplanation": 1,
+      "countAfterExplanation": 1,
+      "clipboardWrite": "blocked"
+    }
+  },
+  {
+    "name": "native-long-source-arguments",
+    "passed": true,
+    "details": {
+      "method": "complete DOM Range compared with actual native IPC",
+      "characters": 41641,
+      "untruncated": true,
+      "clipboardWrite": "blocked"
+    }
+  },
+  {
+    "name": "native-epub-system-clipboard-content",
+    "passed": true,
+    "details": {
+      "independentWin32Read": true,
+      "completeText": true,
+      "title": true,
+      "author": true,
+      "nestedChapter": "Section A.1",
+      "screenProgress": "Section A.2",
+      "cfi": true,
+      "link": true
+    }
+  },
+  {
+    "name": "native-epub-keyboard-success",
+    "passed": true,
+    "details": {
+      "independentWin32Read": true,
+      "exactText": true,
+      "keyboard": "Enter",
+      "successToast": true,
+      "selectionCleared": true
+    }
+  },
+  {
+    "name": "native-multiline-space-success",
+    "passed": true,
+    "details": {
+      "keyboard": "Space",
+      "systemClipboard": true,
+      "newlines": true,
+      "indentation": true,
+      "trailingNewline": true,
+      "selectionCleared": true
+    }
+  },
+  {
+    "name": "native-async-success",
+    "passed": true,
+    "details": {
+      "method": "pause actual IPC; select B; resume actual native write",
+      "copied": "A",
+      "systemClipboard": true,
+      "preserved": "B"
+    }
+  },
+  {
+    "name": "native-notebook-success-no-side-effects",
+    "passed": true,
+    "details": {
+      "copyToNotebookEnabled": true,
+      "before": 1,
+      "after": 1,
+      "actualWritesSucceeded": true
+    }
+  },
+  {
+    "name": "native-footnote-success",
+    "passed": true,
+    "details": {
+      "systemClipboard": true,
+      "completeText": true,
+      "noUnmappedChapter": true,
+      "actualFootnoteCfi": true
+    }
+  },
+  {
+    "name": "native-long-success",
+    "passed": true,
+    "details": {
+      "systemClipboard": true,
+      "characters": 41641,
+      "untruncated": true
+    }
+  },
+  {
+    "name": "native-offline",
+    "passed": true,
+    "details": {
+      "outboundRequests": 0,
+      "requestUrls": ["http://ipc.localhost/plugin%3Aclipboard-manager%7Cwrite_text"],
+      "systemClipboard": true,
+      "noAiAccountOrKey": true
+    }
+  },
+  {
+    "name": "native-display",
+    "passed": true,
+    "details": {
+      "dark": "default-dark",
+      "eink": true,
+      "screenshots": ["native-dark.png", "native-eink.png"]
+    }
+  },
+  {
+    "name": "native-cross-chapter",
+    "passed": true,
+    "details": {
+      "systemClipboard": true,
+      "allSourceTextInOrder": true,
+      "blockBoundaryNewline": true,
+      "chapters": ["Section A.1", "Section A.2"]
+    }
+  },
+  {
+    "name": "native-pdf-page-1",
+    "passed": true,
+    "details": {
+      "systemClipboard": true,
+      "completeText": true,
+      "page": 1,
+      "notPrintedPageLabel": true,
+      "title": true,
+      "author": "作者：Chuck"
+    }
+  },
+  {
+    "name": "native-pdf-page-2",
+    "passed": true,
+    "details": {
+      "systemClipboard": true,
+      "completeText": true,
+      "page": 2,
+      "notPrintedPageLabel": true,
+      "keyboard": "Enter"
+    }
+  },
+  {
+    "name": "native-multibook-missing-metadata",
+    "passed": true,
+    "details": {
+      "simultaneouslyOpenBooks": 3,
+      "noTitleMixing": true,
+      "noAuthorMixing": true,
+      "missingAuthorOmitted": true,
+      "systemClipboard": true,
+      "titleLine": "资料：《issue-2-filename-only》"
+    }
+  },
+  {
+    "name": "native-multibook-alice",
+    "passed": true,
+    "details": {
+      "simultaneouslyOpenBooks": 3,
+      "systemClipboard": true,
+      "title": "Alice",
+      "author": "Lewis Carroll",
+      "noSourceFixtureMetadata": true
+    }
+  },
+  {
+    "name": "native-pointer-selection-success",
+    "passed": true,
+    "details": {
+      "selection": "actual mouse drag",
+      "systemClipboard": true,
+      "exactText": true,
+      "successToast": true,
+      "selectionCleared": true
+    }
+  },
+  {
+    "name": "native-pdf-cross-page",
+    "passed": true,
+    "details": {
+      "method": "real mouse drag in scrolled PDF",
+      "systemClipboard": true,
+      "pages": [1, 2],
+      "completeSegments": true,
+      "sourceCfiCount": 2,
+      "readingOrder": true,
+      "notPrintedPageLabel": true,
+      "linkLabel": "返回选区起点",
+      "selectionCleared": true
+    }
+  },
+  {
+    "name": "native-toolbar-customization",
+    "passed": true,
+    "details": {
+      "hideAndShow": true,
+      "actualPointerReorderToFirst": true,
+      "persistedAcrossReload": true,
+      "waitForSettingsWrite": true,
+      "restoredToEnd": true,
+      "otherToolsKept": true
+    }
+  }
+]

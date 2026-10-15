@@ -5,9 +5,12 @@
 ## 当前状态
 
 功能代码已实现，分支为 `feat/issue-2-copy-explanation-prompt`，起点为 `9fd7a4820`。
-全量单测、类型检查、Biome、Web 生产构建和 Web 实际交互验证已通过。
-按用户要求，Windows 构建已在 Rust 依赖编译阶段终止；尚未生成可供验收的 Windows 程序，也未完成 Windows Tauri 手工验证。
-Issue 应保持开启，待新环境完成原生验收后再更新状态。
+本轮从 `be21fe8f6` 继续，已完成 Windows Tauri debug/no-bundle 构建和独立程序、独立书库的原生验收。
+原生验收发现并修复了“系统剪贴板拒绝访问时，WebView 回退仍可能报告成功”的问题；新增回归测试后，全量单测、类型检查和 Biome 均通过。
+EPUB/PDF 实际系统剪贴板、跨页、失败保留与重试、异步改选、键盘、工具栏持久化、离线及无笔记副作用均已核对。
+本轮详细命令、验证方法、输出样本及截图见 [Windows 验收记录](issue-2/windows-validation.md)。
+此前 Web 生产构建和 Web 实际交互验证已通过；本轮修复只改变原生失败分支，Web 分支未改动。
+尚待使用者自行粘贴到 ChatGPT Desktop 核对，Issue 保持开启；未合并或发布安装包。
 
 ## 使用与实现
 
@@ -29,8 +32,9 @@ Issue 应保持开启，待新环境完成原生验收后再更新状态。
 | `src/app/reader/components/annotator/AnnotationTools.tsx` | 工具定义及可访问名称 |
 | `src/utils/annotationToolbar.ts`、`src/types/annotator.ts` | 工具注册；默认列表保持原样 |
 | `src/types/view.ts` | 声明引擎已有的同步 `getProgressOf` 接口 |
+| `src/utils/clipboard.ts` | 原生写入失败返回 false，避免 WebView 假成功；保留 Web 原有回退 |
 | `public/locales/zh-CN/translation.json`、`zh-TW/translation.json` | 按钮、说明、成功和失败消息 |
-| `src/__tests__/components/annotator/CopyExplanationPrompt.test.tsx` | 28 个动作到剪贴板的行为场景 |
+| `src/__tests__/components/annotator/CopyExplanationPrompt.test.tsx` | 29 个动作到剪贴板的行为场景，含原生失败/WebView 假成功回归 |
 | `src/__tests__/utils/annotationToolbar.test.ts` | 注册和默认行为兼容 |
 | `src/__tests__/components/settings/AnnotationToolbarCustomizerEink.test.tsx` | 工具加入、移除、顺序及持久化 |
 
@@ -40,10 +44,13 @@ Issue 应保持开启，待新环境完成原生验收后再更新状态。
 
 | 检查 | 结果 |
 | --- | --- |
-| `pnpm test --run --maxWorkers=2 --testTimeout=15000 --reporter=dot` | 1,154 个文件通过，4 个跳过；13,666 项测试通过，16 项跳过 |
-| 下列 3 个相关测试文件 | 54 项通过 |
+| `pnpm test --run --maxWorkers=2 --testTimeout=15000 --reporter=dot` | 1,154 个文件通过，4 个跳过；13,667 项测试通过，16 项跳过 |
+| 下列 3 个相关测试文件 | 55 项通过 |
 | `pnpm lint` | TypeScript 与 Biome 通过 |
-| `pnpm --filter @readest/readest-app build-web` | Web 生产构建通过 |
+| `pnpm tauri build --debug --no-bundle --config <本地隔离配置>` | Windows 构建通过；包含 Next.js 编译、类型检查、静态导出及 Rust 编译 |
+| `pnpm --filter @readest/readest-app build-web` | 上一提交的 Web 生产构建通过，本轮未重跑 |
+| `pnpm test --run src/__tests__/next-config.test.ts --maxWorkers=1` | 还原临时构建配置后 5 项通过 |
+| `pnpm exec biome check`（本轮两个 TS 文件） | 格式及 lint 通过 |
 | `git diff --check` | 通过 |
 
 ```powershell
@@ -77,13 +84,19 @@ pnpm --filter @readest/readest-app setup-vendors
 pnpm tauri info
 ```
 
-若 npm 用户配置指向不可用镜像，可在当前 PowerShell 会话临时设置 `$env:npm_config_registry='https://registry.npmjs.org'` 后重试安装和 vendor 准备。
+若用户配置指向不可用镜像，在当前 PowerShell 会话同时设置以下变量，再重试安装和 vendor 准备。pnpm 11 不再读取 `npm_config_*`；`npx` 仍需要 npm 的变量。可先用 `pnpm config get registry` 核对实际地址，无需修改全局配置。
+
+```powershell
+$env:pnpm_config_registry='https://registry.npmjs.org'
+$env:npm_config_registry='https://registry.npmjs.org'
+pnpm config get registry
+```
 保留仓库跟踪的 `.env`、`.env.web` 和 `.env.tauri`；本功能的本地阅读、复制不需要填写 AI Key。
 不要把 `.env.local.example` 中的占位符当作可用服务配置。
 
 先运行 `pnpm dev-web` 可以继续前端工作；Windows 原生验收运行 `pnpm tauri build --debug --no-bundle`。
-本机 16 GB 内存下，同时运行全量测试和构建曾导致编译工具耗尽内存；应分开执行。
-后续单任务构建使用了以下会话变量，已完成 Next.js 静态导出和类型检查，随后在 Rust 编译期间按用户要求停止：
+上一轮 16 GB 环境同时运行全量测试和构建曾导致编译工具耗尽内存；本轮 Windows 11 x64 为 32 GB，但其他程序运行时可用内存较少，仍采用以下限制，并将全量测试与构建分开执行。
+本轮初次 Rust 构建用时 24 分 01 秒；修复后的构建用时 4 分 10 秒，两次均成功：
 
 ```powershell
 $env:CARGO_BUILD_JOBS='1'
@@ -97,26 +110,25 @@ $env:CIRCLE_NODE_TOTAL='3'
 ```
 
 当前 Next.js 版本默认开启 Turbopack 生产文件系统缓存。中断后的缓存和编译器内存重叠曾引发资源分配错误。
-最后一次构建还临时设置了 `experimental.turbopackFileSystemCacheForBuild: false`，前端编译通过；该本地配置改动已在清理时还原，没有包含在功能提交中。
+本轮构建临时设置了 `experimental.turbopackFileSystemCacheForBuild: false` 和 `experimental.cpus: 1`，前端编译通过；构建后已按原文件还原，没有包含在功能提交中。
 新环境如遇同类问题，可依据 [Next.js 缓存文档](https://nextjs.org/docs/app/api-reference/config/next-config-js/turbopackFileSystemCache) 临时关闭生产缓存后重试；避免提交机器专用配置。
 
-## 优先接续的验收
+## 剩余交接
 
-1. 在新环境安装依赖并准备 vendor，执行类型/代码检查及上述 54 项相关测试。
-2. 单任务完成 Windows 原生构建，记录实际命令和结果。尚无已通过的 Windows 构建结论可沿用。
-3. 使用独立测试程序和书库，导入 `apps/readest-app/src/__tests__/fixtures/data/` 下的 `sample-alice.epub` 与 `sample-alice.pdf`，不要覆盖日常安装或书库。
-4. 从 Available 启用按钮，核对 Windows 原生剪贴板中的完整文字、标题、章节、CFI、返回链接及 PDF 文档页序号；确认成功后选区清除。
-5. 核对 Copy to Notebook 无副作用、键盘操作、深浅色/e-ink；失败重试和异步改选已有行为测试，平台上出现差异时再补充回归。
-6. 由使用者自行粘贴到 ChatGPT Desktop，核对内容后发送；实现不自动启动、粘贴或发送。
-7. 把 Windows 结果和剩余问题记录到 Issue #2，再决定合并及关闭 Issue。
+1. 使用独立测试程序，划选 Alice EPUB 或 PDF 的文字，点击“复制解释提示词”。
+2. 由使用者自行切换到 ChatGPT Desktop 粘贴，核对中文任务、完整原文、书名、作者、章节或文档页序号与选区一致，再自行决定发送。
+3. 把人工交接结果补充到 Issue #2，由维护者决定合并及关闭 Issue。
+
+没有自动启动、控制 ChatGPT Desktop、粘贴或发送。release 优化构建、签名及安装包未执行；本轮验收对象是独立的 Windows debug 可执行程序。
 
 若测试机已有 Readest，可用 `--config` 加载自行创建的本地 Tauri 覆盖，使用独立 identifier，并把 `plugins.deep-link.desktop.schemes` 设为 `[]`，避免测试程序注册日常协议。
 在独立测试可执行文件目录创建 `settings.json`（内容 `{}`）可触发既有 portable 模式，从而隔离书库。
-这些测试配置不随源码提交；完成测试后删除。
+这些测试配置不随源码提交。测试时使用独立的 WebView2 用户目录，禁用更新，不运行安装程序；现有安装和日常书库未参与验收，已有协议处理项与测试前一致。
 
-## 本次清理与交付边界
+## 上一轮清理与本轮交付边界
 
-按用户要求停止原生编译，删除本次构建目录、依赖目录、生成的 vendor/权限/schema/TypeScript 缓存及浏览器测试缓存。
+上一轮按用户要求停止原生编译，删除当时的构建目录、依赖目录、生成的 vendor/权限/schema/TypeScript 缓存及浏览器测试缓存。
 同时删除临时 `.npmrc`、`.env.local` 和 `tauri.issue2.local.json`，还原构建工具改写的跟踪文件。
-功能源码、测试、本文与两张验证截图保留在分支中。源码不依赖本机临时路径或临时配置。
+本轮已重新恢复依赖和 vendor，完成构建后还原临时 Next.js 配置，以及 Tauri/Turso 子模块的构建生成文件。提交仅包含剪贴板修复、回归测试与验收文档/证据；依赖、缓存、vendor、构建产物和隔离配置未提交。
+独立测试可执行程序及完整本地日志作为接续材料保留，便于完成人工粘贴验收。源码不依赖本机临时路径或临时配置。
 系统级已安装的编译工具不属于项目构建产物；已有 Readest 安装与日常书库未参与本次清理。

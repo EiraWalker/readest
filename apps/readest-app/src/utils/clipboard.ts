@@ -24,9 +24,10 @@ export const writeTextToClipboard = async (text: string): Promise<boolean> => {
       await writeText(text);
       return true;
     } catch (err) {
-      // Fall through to web APIs below — better to silently degrade than
-      // to lose the user's copy entirely if the plugin is unavailable.
-      console.warn('[clipboard] tauri writeText failed, falling back', err);
+      // WebView APIs can report success while the OS clipboard is unavailable.
+      // Keep native failures retryable instead of clearing the user's selection.
+      console.warn('[clipboard] tauri writeText failed', err);
+      return false;
     }
   }
 

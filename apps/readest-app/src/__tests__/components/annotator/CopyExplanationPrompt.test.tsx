@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
     keepSelectionAfterLookup: false,
   },
   saveConfig: vi.fn(),
+  nativeClipboardWrite: vi.fn<(text: string) => Promise<void>>(),
   updateBooknotes: vi.fn(),
   deselect: vi.fn(),
   restoreSelectionRange: vi.fn(() => true),
@@ -228,6 +229,7 @@ vi.mock('@/components/Popup', () => ({
   ),
 }));
 vi.mock('@/utils/clipboard', () => ({ writeTextToClipboard: vi.fn() }));
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: h.nativeClipboardWrite }));
 // The dismiss button stands in for the popup's close / backdrop tap, so a test
 // can drive the route back out of the lookup. Each surface reads its text the
 // way the real one does on every render, so rendering one without a word fails
@@ -372,6 +374,7 @@ afterEach(() => {
   cleanup();
   document.body.innerHTML = '';
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 const select = async (overrides: Partial<TextSelection> = {}) => {
@@ -685,6 +688,38 @@ describe('selection toolbar → explanation prompt clipboard', () => {
     expect(h.deselect).not.toHaveBeenCalled();
     copy();
     await waitFor(() => expect(hasToast('Explanation prompt copied')).toBe(true));
+  });
+
+  test('retains the selection when the native clipboard fails even if the WebView reports success', async () => {
+    const actual = await vi.importActual<typeof import('@/utils/clipboard')>('@/utils/clipboard');
+    vi.mocked(writeTextToClipboard).mockImplementation(actual.writeTextToClipboard);
+    vi.stubEnv('NEXT_PUBLIC_APP_PLATFORM', 'tauri');
+    h.nativeClipboardWrite.mockRejectedValueOnce(new Error('Clipboard is held by another party'));
+    h.nativeClipboardWrite.mockResolvedValue(undefined);
+    const webWrite = vi.fn().mockResolvedValue(undefined);
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: webWrite },
+    });
+    try {
+      await select();
+      copy();
+      await waitFor(() =>
+        expect(hasToast('Could not copy explanation prompt. Please try again.')).toBe(true),
+      );
+      expect(hasToast('Explanation prompt copied')).toBe(false);
+      expect(h.deselect).not.toHaveBeenCalled();
+      expect(screen.getByTestId('selection-toolbar')).toBeTruthy();
+      expect(h.updateBooknotes).not.toHaveBeenCalled();
+      expect(webWrite).not.toHaveBeenCalled();
+      copy();
+      await waitFor(() => expect(hasToast('Explanation prompt copied')).toBe(true));
+      expect(h.nativeClipboardWrite).toHaveBeenLastCalledWith(copiedText());
+    } finally {
+      if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
   });
 
   test.each([
