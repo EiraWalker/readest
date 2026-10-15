@@ -10,6 +10,7 @@
 EPUB/PDF 实际系统剪贴板、跨页、失败保留与重试、异步改选、键盘、工具栏持久化、离线及无笔记副作用均已核对。
 本轮详细命令、验证方法、输出样本及截图见 [Windows 验收记录](issue-2/windows-validation.md)。
 此前 Web 生产构建和 Web 实际交互验证已通过；本轮修复只改变原生失败分支，Web 分支未改动。
+默认推送钩子的无参数全量测试曾发生一项 5 秒超时，已记录为 [Issue #3](https://github.com/EiraWalker/readest/issues/3)，不计为通过；完整受限命令的通过结果与推送检查方法见 Windows 验收记录。
 尚待使用者自行粘贴到 ChatGPT Desktop 核对，Issue 保持开启；未合并或发布安装包。
 
 ## 使用与实现

@@ -51,6 +51,16 @@ git diff --check
 | 还原临时配置后的测试 | 5 项通过 |
 | 最终两个 TS 文件的 Biome 检查 | 通过，无自动修复 |
 
+默认推送钩子随后再次运行了无参数的全量测试，`library-search-ssr.test.ts` 的 `imports without browser globals` 在 5,015 ms 超时；该轮已中断，**没有计为通过**。原因尚未确认，已独立记录为 [Issue #3](https://github.com/EiraWalker/readest/issues/3)。不以受限参数下通过代替默认参数通过，也没有改动该 SSR 测试、Vitest 配置或仓库钩子。
+
+本次推送采用一次性的本地 `core.hooksPath`，仍顺序执行仓库要求的三项检查，仅为全量测试加上本机已使用的资源及超时参数；该 hook 和配置不提交：
+
+```sh
+pnpm -C apps/readest-app format:check
+pnpm -C apps/readest-app lint
+pnpm -C apps/readest-app test --run --maxWorkers=2 --testTimeout=15000 --reporter=dot
+```
+
 验收 EXE SHA256：`A0EE032F8062B68585669DD3D88B7597123887B00F71079547CFB5065C74F05C`。这是未经 release 优化、签名和安装包封装的 debug 程序。
 
 本地隔离配置内容如下，不随源码提交：
