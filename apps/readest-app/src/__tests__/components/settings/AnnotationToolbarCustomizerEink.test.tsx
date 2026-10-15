@@ -43,12 +43,41 @@ vi.mock('@/utils/share', () => ({
 }));
 
 import AnnotationToolbarCustomizer from '@/components/settings/AnnotationToolbarCustomizer';
+import { saveViewSettings } from '@/helpers/settings';
+import { DEFAULT_ANNOTATION_TOOLBAR_ITEMS } from '@/utils/annotationToolbar';
 
 afterEach(() => {
   cleanup();
 });
 
 describe('AnnotationToolbarCustomizer e-ink toolbar preview', () => {
+  it('adds and removes the explanation tool while preserving the existing order and persisting it', () => {
+    const { getByRole, container } = render(
+      <AnnotationToolbarCustomizer bookKey='test' onBack={() => {}} />,
+    );
+    const button = () => getByRole('button', { name: 'Copy Explanation Prompt' });
+    expect(container.querySelector('.selection-popup')!.contains(button())).toBe(false);
+    fireEvent.click(button());
+    expect(container.querySelector('.selection-popup')!.contains(button())).toBe(true);
+    expect(saveViewSettings).toHaveBeenLastCalledWith(
+      {},
+      'test',
+      'annotationToolbarItems',
+      [...DEFAULT_ANNOTATION_TOOLBAR_ITEMS, 'copyexplain'],
+      false,
+      true,
+    );
+    fireEvent.click(button());
+    expect(container.querySelector('.selection-popup')!.contains(button())).toBe(false);
+    expect(saveViewSettings).toHaveBeenLastCalledWith(
+      {},
+      'test',
+      'annotationToolbarItems',
+      DEFAULT_ANNOTATION_TOOLBAR_ITEMS,
+      false,
+      true,
+    );
+  });
   it('marks the toolbar preview eink-bordered so e-ink swaps the dark fill for a bordered base-100 surface', () => {
     const { container } = render(<AnnotationToolbarCustomizer bookKey='test' onBack={() => {}} />);
     const toolbarPreview = container.querySelector('.selection-popup') as HTMLElement;

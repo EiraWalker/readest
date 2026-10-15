@@ -4,6 +4,7 @@ import { FiCopy } from 'react-icons/fi';
 import { FiLink } from 'react-icons/fi';
 import { FiShare } from 'react-icons/fi';
 import { FiImage } from 'react-icons/fi';
+import { FiMessageSquare } from 'react-icons/fi';
 import { PiHighlighterFill } from 'react-icons/pi';
 import { LuBookA } from 'react-icons/lu';
 import { BsPencilSquare } from 'react-icons/bs';
@@ -50,6 +51,12 @@ export const annotationToolButtons = createAnnotationToolButtons([
     label: _('Copy Link'),
     tooltip: _('Copy link to text after selection'),
     Icon: FiLink,
+  },
+  {
+    type: 'copyexplain',
+    label: _('Copy Explanation Prompt'),
+    tooltip: _('Copy a Chinese explanation prompt with the selected text and its source'),
+    Icon: FiMessageSquare,
   },
   {
     type: 'highlight',

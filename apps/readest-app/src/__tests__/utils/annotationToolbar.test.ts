@@ -13,6 +13,13 @@ import {
 } from '@/utils/annotationToolbar';
 
 describe('annotationToolbar helpers', () => {
+  test('copy explanation prompt is available, opt-in, and never a quick action', () => {
+    const tool = annotationToolButtons.find((button) => button.type === 'copyexplain');
+    expect(tool?.label).toBe('Copy Explanation Prompt');
+    expect(tool?.quickAction).not.toBe(true);
+    expect(getAvailableToolTypes(undefined, false)).toContain('copyexplain');
+    expect(getToolbarToolTypes(undefined, true)).not.toContain('copyexplain');
+  });
   test('ALL_ANNOTATION_TOOL_TYPES matches the button registry order', () => {
     expect(ALL_ANNOTATION_TOOL_TYPES).toEqual(annotationToolButtons.map((b) => b.type));
   });
@@ -58,6 +65,7 @@ describe('annotationToolbar helpers', () => {
   test('getAvailableToolTypes returns canonical-order complement', () => {
     expect(getAvailableToolTypes(['copy'], true)).toEqual([
       'copylink',
+      'copyexplain',
       'highlight',
       'annotate',
       'search',

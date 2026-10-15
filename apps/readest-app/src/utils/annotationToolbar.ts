@@ -14,6 +14,7 @@ export const supportsProofread = (format: BookFormat | undefined): boolean =>
 export const ALL_ANNOTATION_TOOL_TYPES: AnnotationToolType[] = [
   'copy',
   'copylink',
+  'copyexplain',
   'highlight',
   'annotate',
   'search',

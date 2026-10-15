@@ -84,6 +84,10 @@ import {
 import { buildAnnotationIndex, selectLocationAnnotations } from '../../utils/annotationIndex';
 import { findContentAtPoint } from '../../utils/crossDocSelection';
 import {
+  buildExplanationPrompt,
+  snapshotExplanationSelection,
+} from '../../utils/explanationPrompt';
+import {
   expandAllRenderedSections,
   expandGlobalAnnotation,
   isSyntheticGlobalValue,
@@ -189,6 +193,14 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   const containerRef = React.useRef<HTMLDivElement>(null);
 
   const [selection, setSelection] = useState<TextSelection | null>(null);
+  const latestSelectionRef = useRef(selection);
+  latestSelectionRef.current = selection;
+  useEffect(
+    () => () => {
+      latestSelectionRef.current = null;
+    },
+    [],
+  );
   const [translationEpoch, setTranslationEpoch] = useState(0);
   const [showAnnotPopup, setShowAnnotPopup] = useState(false);
   const [showDictionaryPopup, setShowDictionaryPopup] = useState(false);
@@ -483,22 +495,19 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     [primaryLang, transformCtx],
   );
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const handleDismissPopup = useCallback(
-    throttle(() => {
-      instantLookupDeselectedRef.current = false;
-      setSelection(null);
-      setShowAnnotPopup(false);
-      setShowAnnotationNotes(false);
-      setAnnotationNotes([]);
-      setShowDictionaryPopup(false);
-      setShowDeepLPopup(false);
-      setShowProofreadPopup(false);
-      setEditingAnnotation(null);
-      setNoteEditorTarget(null);
-    }, 500),
-    [],
-  );
+  const dismissPopup = useCallback(() => {
+    instantLookupDeselectedRef.current = false;
+    setSelection(null);
+    setShowAnnotPopup(false);
+    setShowAnnotationNotes(false);
+    setAnnotationNotes([]);
+    setShowDictionaryPopup(false);
+    setShowDeepLPopup(false);
+    setShowProofreadPopup(false);
+    setEditingAnnotation(null);
+    setNoteEditorTarget(null);
+  }, []);
+  const handleDismissPopup = useMemo(() => throttle(dismissPopup, 500), [dismissPopup]);
 
   const {
     isTextSelected,
@@ -536,8 +545,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     handleDismissPopup,
   );
 
-  const handleDismissPopupAndSelection = () => {
-    handleDismissPopup();
+  const dismissPopupAndSelection = (dismiss: () => void) => {
+    dismiss();
     view?.deselect();
     // A popup-window selection lives in its own document (the footnote popup
     // view's iframe or the host document), which view.deselect() can't reach.
@@ -546,6 +555,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
     }
     isTextSelected.current = false;
   };
+  const handleDismissPopupAndSelection = () => dismissPopupAndSelection(handleDismissPopup);
 
   // Whether the currently shown selection came from the footnote popup, for
   // event handlers that only know the incoming event, not the selection state.
@@ -1479,10 +1489,12 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
   // required to be present.
   // A link to the selected passage, or null for a selection without a CFI
   // (synthesized footnote text).
-  const getSelectionLink = (linkType: AnnotationLinkType): string | null => {
+  const getSelectionLink = (linkType: AnnotationLinkType, snapshotCfi?: string): string | null => {
     if (!selection) return null;
     const cfi =
-      selection.cfi || (selection.popup ? null : view?.getCFI(selection.index, selection.range));
+      snapshotCfi ||
+      selection.cfi ||
+      (selection.popup ? null : view?.getCFI(selection.index, selection.range));
     if (!cfi) return null;
     const noteId = config.booknotes?.find((note) => note.cfi === cfi && !note.deletedAt)?.id;
     return buildAnnotationUrl(
@@ -1504,6 +1516,67 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
       timeout: 2000,
     });
     handleDismissPopupAndSelection();
+  };
+
+  const handleCopyExplanationPrompt = async () => {
+    if (!selection) return;
+    const selected = selection;
+    const snapshot = snapshotExplanationSelection(selected, bookData, view);
+    if (!snapshot.text.trim()) return;
+    const link = snapshot.startCfi
+      ? getSelectionLink(
+          viewSettings.noteExportConfig?.linkType ?? DEFAULT_NOTE_EXPORT_CONFIG.linkType,
+          snapshot.startCfi,
+        )
+      : null;
+    const prompt = buildExplanationPrompt(snapshot, link);
+    const ranges = (selected.segments ?? [selected]).map(({ range }) => range.cloneRange());
+    const matches = (a: Range, b: Range) =>
+      a.startContainer === b.startContainer &&
+      a.startOffset === b.startOffset &&
+      a.endContainer === b.endContainer &&
+      a.endOffset === b.endOffset;
+    const stillSelected = () => {
+      if (latestSelectionRef.current !== selected) return false;
+      if (
+        !(selected.segments ?? [selected]).every(({ range }, index) =>
+          matches(range, ranges[index]!),
+        )
+      )
+        return false;
+      // Native selection can change before useTextSelector has published its
+      // new React state. Never deselect that newer range either.
+      const docs = new Set([
+        ...ranges.map((range) => range.startContainer.ownerDocument),
+        ...(view?.renderer.getContents().map(({ doc }) => doc) ?? []),
+      ]);
+      return [...docs].every((doc) => {
+        const native = doc?.getSelection();
+        return (
+          !native?.rangeCount ||
+          native.isCollapsed ||
+          ranges.some((range) => matches(range, native.getRangeAt(0)))
+        );
+      });
+    };
+    let copied = false;
+    try {
+      copied = await writeTextToClipboard(prompt);
+    } catch {
+      // Preserve the selection and allow a retry on either failure contract.
+    }
+    eventDispatcher.dispatch('toast', {
+      type: copied ? 'info' : 'error',
+      message: copied
+        ? _('Explanation prompt copied')
+        : _('Could not copy explanation prompt. Please try again.'),
+      className: 'whitespace-nowrap',
+      timeout: 2000,
+    });
+    if (stillSelected()) {
+      if (copied) dismissPopupAndSelection(dismissPopup);
+      else for (const range of ranges) restoreSelectionRange(range);
+    }
   };
 
   const handleShare = () => {
@@ -2547,6 +2620,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
           onClick: handleCopyLink,
           disabled: popupSelectionNoCfi,
         };
+      case 'copyexplain':
+        return { tooltipText: _(label), Icon, onClick: () => void handleCopyExplanationPrompt() };
       case 'highlight':
         return {
           tooltipText: selectionAnnotated ? _('Delete Highlight') : _(label),

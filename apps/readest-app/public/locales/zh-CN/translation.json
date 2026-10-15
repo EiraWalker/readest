@@ -2541,5 +2541,9 @@
   "{{count}} voices available_other": "可用语音 {{count}} 个",
   "Multilingual": "多语言",
   "Expressive": "富有表现力",
-  "Show Page Thumbnails": "显示页面缩略图"
+  "Show Page Thumbnails": "显示页面缩略图",
+  "Copy Explanation Prompt": "复制解释提示词",
+  "Copy a Chinese explanation prompt with the selected text and its source": "复制包含所选文字及其出处的中文解释提示词",
+  "Explanation prompt copied": "已复制解释提示词",
+  "Could not copy explanation prompt. Please try again.": "无法复制解释提示词，请重试。"
 }

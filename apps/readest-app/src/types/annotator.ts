@@ -1,6 +1,7 @@
 export type AnnotationToolType =
   | 'copy'
   | 'copylink'
+  | 'copyexplain'
   | 'highlight'
   | 'annotate'
   | 'search'
