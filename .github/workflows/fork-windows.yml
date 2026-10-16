@@ -6,7 +6,7 @@ on:
   push:
     paths:
       - '.github/workflows/fork-windows.yml'
-      - '.github/scripts/fork-windows.ps1'
+      - '.github/scripts/**'
       - 'apps/readest-app/**'
       - 'packages/**'
       - 'patches/**'
@@ -46,6 +46,9 @@ jobs:
       - run: pnpm --filter @readest/readest-app setup-vendors
       - run: pnpm format:check
       - run: pnpm lint
+      - name: Completion watcher contract
+        shell: pwsh
+        run: ./.github/scripts/tests/watch-fork-ci.Tests.ps1
       - name: Full unit suite
         run: pnpm test --run --pool=threads --maxWorkers=2
 
@@ -53,6 +56,8 @@ jobs:
     if: github.repository == 'EiraWalker/readest'
     runs-on: windows-2025
     timeout-minutes: 90
+    outputs:
+      artifact-url: ${{ steps.artifact.outputs.artifact-url }}
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
@@ -75,14 +80,62 @@ jobs:
         with:
           toolchain: '1.99.0'
           targets: x86_64-pc-windows-msvc
+      - name: Restore native build cache
+        id: native-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            apps/readest-app/extensions/windows-thumbnail/target
+          key: readest-native-v2-windows-rust1.99.0-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.github/scripts/fork-windows.ps1') }}-${{ github.sha }}
+          restore-keys: |
+            readest-native-v2-windows-rust1.99.0-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '.github/scripts/fork-windows.ps1') }}-
+            readest-native-v2-windows-rust1.99.0-
+      # Bootstrap from the first CI's dependency cache without overwriting it.
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        if: steps.native-cache.outputs.cache-matched-key == ''
         with:
           key: fork-windows-x64-release
+          save-if: 'false'
+      - name: Restore frontend build cache
+        id: frontend-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: apps/readest-app/.next/cache
+          key: readest-next-v1-windows-${{ hashFiles('pnpm-lock.yaml', 'apps/readest-app/next.config.mjs') }}-${{ github.sha }}
+          restore-keys: |
+            readest-next-v1-windows-${{ hashFiles('pnpm-lock.yaml', 'apps/readest-app/next.config.mjs') }}-
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @readest/readest-app setup-vendors
       - name: Build unsigned release and stage downloads
         shell: pwsh
         run: ./.github/scripts/fork-windows.ps1
+      - name: Save native build cache
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            apps/readest-app/extensions/windows-thumbnail/target
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Save frontend build cache
+        if: steps.frontend-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: apps/readest-app/.next/cache
+          key: ${{ steps.frontend-cache.outputs.cache-primary-key }}
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Readest-build-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Upload Windows release
         id: artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -100,3 +153,37 @@ jobs:
           "## Windows x64 Release" >> $env:GITHUB_STEP_SUMMARY
           "Source: ``$env:GITHUB_SHA``" >> $env:GITHUB_STEP_SUMMARY
           "[Download EXE and installer]($env:ARTIFACT_URL) (7 days)" >> $env:GITHUB_STEP_SUMMARY
+
+  completion:
+    if: always() && github.repository == 'EiraWalker/readest'
+    needs: [checks, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Write completion signal
+        shell: python
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+          ARTIFACT_URL: ${{ needs.windows.outputs.artifact-url }}
+        run: |
+          import datetime, json, os, pathlib
+          jobs = json.loads(os.environ['JOB_RESULTS'])
+          results = {name: job['result'] for name, job in jobs.items()}
+          conclusion = ('success' if all(x == 'success' for x in results.values())
+                        else 'cancelled' if 'cancelled' in results.values() else 'failure')
+          signal = dict(repository=os.environ['GITHUB_REPOSITORY'],
+                        runId=int(os.environ['GITHUB_RUN_ID']),
+                        attempt=int(os.environ['GITHUB_RUN_ATTEMPT']),
+                        commit=os.environ['GITHUB_SHA'], ref=os.environ['GITHUB_REF'],
+                        conclusion=conclusion, jobs=results,
+                        artifactUrl=os.environ['ARTIFACT_URL'],
+                        recordedAt=datetime.datetime.now(datetime.timezone.utc).isoformat())
+          pathlib.Path('completion.json').write_text(json.dumps(signal, indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"## CI completion: {conclusion}\n\n```json\n{json.dumps(signal, indent=2)}\n```\n")
+      - name: Publish completion signal
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Readest-ci-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: completion.json
+          retention-days: 7
