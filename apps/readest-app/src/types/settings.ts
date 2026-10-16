@@ -58,6 +58,8 @@ export type KOSyncChecksumMethod = 'binary' | 'filename';
 export type KOSyncStrategy = 'prompt' | 'silent' | 'send' | 'receive';
 
 export interface ReadSettings {
+  /** One local template for every book; absent/invalid values use the built-in prompt. */
+  explanationPromptTemplate?: string;
   sideBarWidth: string;
   isSideBarPinned: boolean;
   notebookWidth: string;

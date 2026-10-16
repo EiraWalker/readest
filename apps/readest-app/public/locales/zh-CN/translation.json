@@ -2545,5 +2545,13 @@
   "Copy Explanation Prompt": "复制解释提示词",
   "Copy a Chinese explanation prompt with the selected text and its source": "复制包含所选文字及其出处的中文解释提示词",
   "Explanation prompt copied": "已复制解释提示词",
-  "Could not copy explanation prompt. Please try again.": "无法复制解释提示词，请重试。"
+  "Could not copy explanation prompt. Please try again.": "无法复制解释提示词，请重试。",
+  "Explanation Prompt": "解释提示词",
+  "One prompt template for all books on this device.": "此设备上的所有书籍共用一份提示词模板。",
+  "Prompt Template": "提示词模板",
+  "Include {{placeholder}} in the template.": "请在模板中加入 {{placeholder}}。",
+  "Could not save the prompt template. Please try again.": "无法保存提示词模板，请重试。",
+  "The complete selected text.": "完整的所选文字。",
+  "Available title, author, chapter, location and link.": "可用的书名、作者、章节、位置和链接。",
+  "Only these two placeholders are replaced. No extra instructions are added.": "仅替换这两个标识符，不会额外添加指令。"
 }

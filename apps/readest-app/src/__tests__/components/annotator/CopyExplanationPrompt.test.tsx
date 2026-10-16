@@ -47,6 +47,7 @@ const h = vi.hoisted(() => ({
 
 const settings = {
   globalReadSettings: {
+    explanationPromptTemplate: undefined as string | undefined,
     highlightStyle: 'highlight',
     highlightStyles: { highlight: 'yellow', underline: 'green', squiggly: 'blue' },
   },
@@ -352,6 +353,7 @@ let toast: ReturnType<typeof vi.fn<(event: CustomEvent<{ message: string }>) => 
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  settings.globalReadSettings.explanationPromptTemplate = undefined;
   h.booksData = {};
   h.views = {};
   h.config.booknotes = [];
@@ -396,6 +398,65 @@ const hasToast = (message: string) =>
   toast.mock.calls.some(([event]) => event.detail.message === message);
 
 describe('selection toolbar → explanation prompt clipboard', () => {
+  test('uses the saved global template without appending fixed instructions or source', async () => {
+    settings.globalReadSettings.explanationPromptTemplate = '  Explain:\n{{selection}}\nEND  ';
+    const selected = await select();
+    copy();
+    await waitFor(() => expect(writeTextToClipboard).toHaveBeenCalled());
+    expect(copiedText()).toBe(`  Explain:\n${selected.text}\nEND  `);
+    expect(h.saveConfig).not.toHaveBeenCalled();
+    expect(h.updateBooknotes).not.toHaveBeenCalled();
+  });
+
+  test('fills repeated source and selection markers once, preserving markers in the inserted text', async () => {
+    settings.globalReadSettings.explanationPromptTemplate =
+      '{{source}}\n{{selection}}\n{{selection}}\n{{source}}\n{{unknown}}';
+    await select({ text: '$& $$ {{source}} {{selection}}\n  quoted code' });
+    copy();
+    await waitFor(() => expect(writeTextToClipboard).toHaveBeenCalled());
+    const output = copiedText();
+    expect(output.match(/资料：《解析的书名》/g)).toHaveLength(2);
+    expect(output.match(/\$& \$\$ \{\{source\}\} \{\{selection\}\}/g)).toHaveLength(2);
+    expect(output).toContain('章节：嵌套小节');
+    expect(output).toContain('返回原文：');
+    expect(output.endsWith('\n{{unknown}}')).toBe(true);
+  });
+
+  test('uses an empty source without changing the surrounding custom template text', async () => {
+    settings.globalReadSettings.explanationPromptTemplate = 'SOURCE[{{source}}]\n{{selection}}';
+    fixture.data.bookDoc!.metadata = { title: '', author: '', language: '' };
+    fixture.data.book = null;
+    fixture.data.file = null;
+    const range = document.createRange();
+    const node = document.createTextNode('footnote');
+    document.body.append(node);
+    range.selectNodeContents(node);
+    await select({ range, text: 'footnote', popup: true, index: -1 });
+    copy();
+    await waitFor(() => expect(writeTextToClipboard).toHaveBeenCalled());
+    expect(copiedText()).toBe('SOURCE[]\nfootnote');
+  });
+
+  test('keeps the click-time template while a clipboard write is pending', async () => {
+    settings.globalReadSettings.explanationPromptTemplate = 'OLD {{selection}}';
+    let finish!: (value: boolean) => void;
+    vi.mocked(writeTextToClipboard).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await select({ text: 'first passage' });
+    copy();
+    settings.globalReadSettings.explanationPromptTemplate = 'NEW {{selection}}';
+    await select({ text: 'second passage' });
+    await act(async () => finish(true));
+    expect(copiedText()).toBe('OLD first passage');
+    expect(h.deselect).not.toHaveBeenCalled();
+    copy();
+    await waitFor(() => expect(copiedText()).toBe('NEW second passage'));
+  });
+
   test('resolves a selection starting at the element boundary before a nested heading', async () => {
     const range = fixture.rangeAt(0, 'code');
     range.setStart(fixture.documents[0]!.body, 2);

@@ -519,6 +519,12 @@ const controlPanelItems = [
     section: 'Annotation Tools',
   },
   {
+    id: 'settings.control.explanationPrompt',
+    labelKey: _('Explanation Prompt'),
+    keywords: ['explanation', 'prompt', 'template', 'selection', 'source', 'copy'],
+    section: 'Annotation Tools',
+  },
+  {
     id: 'settings.control.pagingAnimation',
     labelKey: _('Paging Animation'),
     keywords: ['paging', 'animation', 'transition', 'effect'],

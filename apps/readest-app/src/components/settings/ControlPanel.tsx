@@ -30,6 +30,7 @@ import { canShareText } from '@/utils/share';
 import { useEinkRefreshSupported } from '@/hooks/useEinkRefreshSupported';
 import { optInTelemetry, optOutTelemetry } from '@/utils/telemetry';
 import KeyboardShortcutsSettings from './KeyboardShortcutsSettings';
+import ExplanationPromptEditor from './ExplanationPromptEditor';
 
 const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
   const _ = useTranslation();
@@ -67,6 +68,7 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   );
   const [copyToNotebook, setCopyToNotebook] = useState(viewSettings.copyToNotebook);
   const [showToolbarCustomizer, setShowToolbarCustomizer] = useState(false);
+  const [showExplanationPrompt, setShowExplanationPrompt] = useState(false);
   const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
   const [animated, setAnimated] = useState(viewSettings.animated);
   const [pageTurnStyle, setPageTurnStyle] = useState(viewSettings.pageTurnStyle || 'push');
@@ -449,6 +451,10 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     saveViewSettings(envConfig, bookKey, 'annotationQuickAction', action, false, true);
   };
 
+  if (showExplanationPrompt) {
+    return <ExplanationPromptEditor onBack={() => setShowExplanationPrompt(false)} />;
+  }
+
   if (showToolbarCustomizer) {
     return (
       <AnnotationToolbarCustomizer
@@ -596,6 +602,11 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           title={_('Customize Toolbar')}
           onClick={() => setShowToolbarCustomizer(true)}
           data-setting-id='settings.control.customizeToolbar'
+        />
+        <NavigationRow
+          title={_('Explanation Prompt')}
+          onClick={() => setShowExplanationPrompt(true)}
+          data-setting-id='settings.control.explanationPrompt'
         />
       </BoxedList>
 

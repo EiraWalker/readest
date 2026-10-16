@@ -1520,6 +1520,8 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
 
   const handleCopyExplanationPrompt = async () => {
     if (!selection) return;
+    const template =
+      useSettingsStore.getState().settings.globalReadSettings?.explanationPromptTemplate;
     const selected = selection;
     const snapshot = snapshotExplanationSelection(selected, bookData, view);
     if (!snapshot.text.trim()) return;
@@ -1529,7 +1531,7 @@ const Annotator: React.FC<{ bookKey: string; contentInsets: Insets; gridInsets?:
           snapshot.startCfi,
         )
       : null;
-    const prompt = buildExplanationPrompt(snapshot, link);
+    const prompt = buildExplanationPrompt(snapshot, link, template);
     const ranges = (selected.segments ?? [selected]).map(({ range }) => range.cloneRange());
     const matches = (a: Range, b: Range) =>
       a.startContainer === b.startContainer &&

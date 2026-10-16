@@ -122,6 +122,20 @@ function makeFullSettings(overrides: Partial<SystemSettings> = {}): SystemSettin
   } as SystemSettings;
 }
 
+test('broadcasts the saved explanation template to another reader without replacing local fields', async () => {
+  vi.mocked(emit).mockClear();
+  const template = '{{selection}}\n{{source}}';
+  const settings = makeFullSettings({
+    globalReadSettings: { ...DEFAULT_READSETTINGS, explanationPromptTemplate: template },
+  });
+  await broadcastGlobalSettings(settings);
+  const payload = vi.mocked(emit).mock.calls[0]![1] as SettingsSyncPayload;
+  const receiver = makeFullSettings({ localBooksDir: '/other-window/books' });
+  const merged = mergeSyncedGlobalSettings(receiver, payload);
+  expect(merged.globalReadSettings.explanationPromptTemplate).toBe(template);
+  expect(merged.localBooksDir).toBe('/other-window/books');
+});
+
 describe('broadcastGlobalSettings: readestCloud in the emitted payload', () => {
   beforeEach(() => {
     vi.mocked(emit).mockClear();
