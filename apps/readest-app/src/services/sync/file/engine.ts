@@ -337,16 +337,21 @@ export class FileSyncEngine {
 
   /**
    * Upload the book binary to `<rootPath>/Readest/books/<hash>/<title>.<ext>`.
-   * HEAD-probe + size compare skips re-uploading an already-mirrored book.
-   * Streaming (provider.uploadStream, Tauri only) is preferred — constant JS
-   * heap regardless of book size; web falls back to buffered writeBinary.
+   * Automatic sync uses the existing HEAD size probe. Manual uploads set
+   * verifyContent: equal-size objects are read back and compared byte for
+   * byte, since legacy providers offer no portable full-content checksum.
+   * S3/native use chunked full-content digests for the manual check; other
+   * providers fall back to buffered comparison. Native PUTs still stream.
    *
    * The local source is resolved BEFORE any remote probe: a book this device
    * does not hold can never be uploaded, so probing the remote for it buys
    * nothing — and at library scale (a cloud-only web library) it turns every
    * sync into a full per-book request storm. `no-source` costs zero requests.
    */
-  async pushBookFile(book: Book): Promise<PushBookFileResult> {
+  async pushBookFile(
+    book: Book,
+    { verifyContent = false }: { verifyContent?: boolean } = {},
+  ): Promise<PushBookFileResult> {
     // ABS books stream from the server and never have a local file to push —
     // guard here too, not just in syncLibrary's needsFilePush, since this is
     // also called directly by the explicit per-book Upload action.
@@ -367,14 +372,35 @@ export class FileSyncEngine {
       }
     };
 
+    // Manual uploads must detect in-place edits, including same-size edits.
+    // Legacy objects have no portable content checksum (an S3 ETag need not
+    // be MD5), so verify their bytes rather than trusting size or timestamps.
+    // Automatic library sync retains its existing lightweight probe.
+    const remoteMatches = async (size: number, bytes?: ArrayBuffer): Promise<boolean> => {
+      const head = await probeRemoteHead();
+      if (!head || head.size !== size) return false;
+      if (!verifyContent) return true;
+      if (this.store.getBookFileMD5 && this.provider.readFileMD5) {
+        const local = await this.store.getBookFileMD5(book);
+        if (local === null) return false;
+        const remote = await this.provider.readFileMD5(path, head.etag);
+        return remote !== null && local === remote;
+      }
+      const local = bytes ?? (await this.store.loadBookFile(book))?.bytes;
+      if (!local) return false;
+      const remote = await this.provider.readBinary(path);
+      if (!remote || local.byteLength !== remote.byteLength) return false;
+      const remoteBytes = new Uint8Array(remote);
+      return new Uint8Array(local).every((byte, index) => byte === remoteBytes[index]);
+    };
+
     // Streaming path: resolve the on-disk path + size only, then stream the
     // bytes straight from disk. The metadata fetch never reads the body, so
     // heap stays flat even for gigabyte-scale PDFs.
     if (this.provider.uploadStream) {
       const src = await this.store.resolveLocalBookPath(book);
       if (src) {
-        const remoteHead = await probeRemoteHead();
-        if (remoteHead && remoteHead.size === src.size) {
+        if (await remoteMatches(src.size)) {
           return { uploaded: false, reason: 'remote-matches' };
         }
         await this.ensureDirs(dirs);
@@ -400,8 +426,7 @@ export class FileSyncEngine {
 
     const local = await this.store.loadBookFile(book);
     if (!local) return { uploaded: false, reason: 'no-source' };
-    const remoteHead = await probeRemoteHead();
-    if (remoteHead && remoteHead.size === local.size) {
+    if (await remoteMatches(local.size, local.bytes)) {
       return { uploaded: false, reason: 'remote-matches' };
     }
     await this.ensureDirs(dirs);

@@ -51,6 +51,7 @@ const fakeStore = (opts: Partial<LocalStore> = {}): LocalStore => ({
   loadConfig: opts.loadConfig ?? (async () => null),
   saveBookConfig: opts.saveBookConfig ?? (async () => {}),
   loadBookFile: opts.loadBookFile ?? (async () => null),
+  getBookFileMD5: opts.getBookFileMD5,
   resolveLocalBookPath: opts.resolveLocalBookPath ?? (async () => null),
   saveBookFile: opts.saveBookFile ?? (async () => {}),
   prepareLocalBookPath: opts.prepareLocalBookPath ?? (async () => '/local/dst'),
@@ -63,6 +64,85 @@ const fakeStore = (opts: Partial<LocalStore> = {}): LocalStore => ({
 });
 
 describe('FileSyncEngine.pushBookFile — streaming upload', () => {
+  test('manual native content checks use fresh full digests without buffering either book', async () => {
+    const loadBookFile = vi.fn(async () => null);
+    const readBinary = vi.fn(async () => null);
+    const uploadStream = vi.fn(async () => true);
+    const getBookFileMD5 = vi.fn(async () => 'changed-local-digest');
+    const readFileMD5 = vi.fn(async () => 'verified-remote-digest');
+    const provider = {
+      ...fakeProvider({
+        head: async () => ({ size: 1024, etag: 'opaque-version' }),
+        readBinary,
+        uploadStream,
+      }),
+      readFileMD5,
+    };
+    const engine = new FileSyncEngine(
+      provider,
+      fakeStore({
+        getBookFileMD5,
+        loadBookFile,
+        resolveLocalBookPath: async () => ({ path: '/local/large.pdf', size: 1024 }),
+      }),
+    );
+    expect(await engine.pushBookFile(makeBook('digest'), { verifyContent: true })).toEqual({
+      uploaded: true,
+    });
+    getBookFileMD5.mockResolvedValueOnce('verified-remote-digest');
+    expect(await engine.pushBookFile(makeBook('digest'), { verifyContent: true })).toEqual({
+      uploaded: false,
+      reason: 'remote-matches',
+    });
+    expect(getBookFileMD5).toHaveBeenCalledTimes(2);
+    expect(loadBookFile).not.toHaveBeenCalled();
+    expect(readBinary).not.toHaveBeenCalled();
+    expect(uploadStream).toHaveBeenCalledTimes(1);
+  });
+  test('manual streaming uploads detect same-size changes and preserve a failed verification as failure', async () => {
+    const bytes = new Uint8Array([7, 8, 9]).buffer;
+    const uploadStream = vi.fn(async () => true);
+    const readBinary = vi.fn(async () => new Uint8Array([7, 0, 9]).buffer);
+    const engine = new FileSyncEngine(
+      fakeProvider({ head: async () => ({ size: 3 }), readBinary, uploadStream }),
+      fakeStore({
+        resolveLocalBookPath: async () => ({ path: '/local/book.epub', size: 3 }),
+        loadBookFile: async () => ({ bytes, size: 3 }),
+      }),
+    );
+    expect(await engine.pushBookFile(makeBook('stream-manual'), { verifyContent: true })).toEqual({
+      uploaded: true,
+    });
+    expect(uploadStream).toHaveBeenCalledTimes(1);
+    readBinary.mockRejectedValueOnce(new FileSyncError('Offline', 'NETWORK'));
+    await expect(
+      engine.pushBookFile(makeBook('stream-manual'), { verifyContent: true }),
+    ).rejects.toMatchObject({ code: 'NETWORK' });
+    expect(uploadStream).toHaveBeenCalledTimes(1);
+  });
+  test('manual upload replaces same-size changed content and skips only verified identical bytes', async () => {
+    let remote = new Uint8Array([1, 2, 3]).buffer;
+    const local = new Uint8Array([1, 9, 3]).buffer;
+    const writeBinary = vi.fn(async (_path: string, bytes: ArrayBuffer) => {
+      remote = bytes;
+    });
+    const engine = new FileSyncEngine(
+      fakeProvider({
+        head: async () => ({ size: 3 }),
+        readBinary: async () => remote,
+        writeBinary,
+      }),
+      fakeStore({ loadBookFile: async () => ({ size: 3, bytes: local }) }),
+    );
+    const book = makeBook('manual');
+    expect(await engine.pushBookFile(book, { verifyContent: true })).toEqual({ uploaded: true });
+    expect([...new Uint8Array(remote)]).toEqual([1, 9, 3]);
+    expect(await engine.pushBookFile(book, { verifyContent: true })).toEqual({
+      uploaded: false,
+      reason: 'remote-matches',
+    });
+    expect(writeBinary).toHaveBeenCalledTimes(1);
+  });
   test('retries a rejected stream and preserves its final diagnostic', async () => {
     const failure = new FileSyncError('Server storage full', 'UNKNOWN', 507);
     const uploadStream = vi.fn().mockRejectedValue(failure);

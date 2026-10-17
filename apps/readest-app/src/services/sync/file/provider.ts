@@ -57,6 +57,8 @@ export interface FileSyncProvider {
   readText(path: string): Promise<string | null>;
   /** GET binary. Resolves `null` when the path doesn't exist (404). */
   readBinary(path: string): Promise<ArrayBuffer | null>;
+  /** Full-content MD5, read in chunks. ETag is an opaque version hint, never the digest. */
+  readFileMD5?(path: string, etag?: string): Promise<string | null>;
   /** HEAD probe. Resolves `null` when the path doesn't exist (404). */
   head(path: string): Promise<FileHead | null>;
   /** List immediate children of a directory. Throws on non-2xx. */

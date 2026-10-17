@@ -95,6 +95,20 @@ vi.mock('@/components/Spinner', () => ({ __esModule: true, default: () => null }
 
 afterEach(() => cleanup());
 
+it('keeps upload in the detail modal and passes the selected local book to the shared action', async () => {
+  const book = { ...makeBook(), downloadedAt: 1, uploadedAt: 1 };
+  const upload = vi.fn();
+  render(
+    <DropdownProvider>
+      <BookDetailModal book={book} isOpen onClose={vi.fn()} handleBookUpload={upload} />
+    </DropdownProvider>,
+  );
+  const button = await screen.findByTitle('Upload to Cloud');
+  expect(button.querySelector('svg')).not.toBeNull();
+  fireEvent.click(button);
+  expect(upload).toHaveBeenCalledWith(book);
+});
+
 const makeBook = (): Book =>
   ({
     hash: 'abc123',

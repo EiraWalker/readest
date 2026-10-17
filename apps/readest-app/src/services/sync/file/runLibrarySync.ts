@@ -191,21 +191,25 @@ export const runFileLibrarySyncPass = async (
 /**
  * Explicit per-book Upload, mirrored to EVERY enabled backend — the Book Details
  * / bookshelf cloud buttons call this alongside (or instead of) the Readest
- * Cloud transfer queue. Pushes the binary (HEAD short-circuited; an
- * already-mirrored file counts as success) plus the cover, best-effort per
- * backend. Succeeds when at least one backend took the book. Toasts are the
- * caller's job.
+ * Cloud transfer queue. Verifies content before skipping the binary and
+ * pushes the cover best-effort. Preserves uploaded vs already-matching
+ * outcomes; succeeds when at least one backend took the book. Toasts are
+ * the caller's job.
  */
-export const runFileBookUpload = async (envConfig: EnvConfigType, book: Book): Promise<boolean> => {
+export const runFileBookUpload = async (
+  envConfig: EnvConfigType,
+  book: Book,
+): Promise<'uploaded' | 'remote-matches' | false> => {
   const backends = getActiveFileSyncBackends(useSettingsStore.getState().settings);
-  let anyUploaded = false;
+  let outcome: 'uploaded' | 'remote-matches' | false = false;
   for (const kind of backends) {
     try {
       const engine = await buildEngine(envConfig, kind);
       if (!engine) continue;
-      const result = await engine.pushBookFile(book);
+      const result = await engine.pushBookFile(book, { verifyContent: true });
       if (!result.uploaded && result.reason !== 'remote-matches') continue;
-      anyUploaded = true;
+      if (result.uploaded) outcome = 'uploaded';
+      else if (!outcome) outcome = 'remote-matches';
       try {
         await engine.pushBookCover(book);
       } catch (e) {
@@ -215,7 +219,7 @@ export const runFileBookUpload = async (envConfig: EnvConfigType, book: Book): P
       console.warn('[cloudSync] book upload failed', kind, book.hash, e);
     }
   }
-  return anyUploaded;
+  return outcome;
 };
 
 /**

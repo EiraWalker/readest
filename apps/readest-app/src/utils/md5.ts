@@ -38,7 +38,7 @@ export async function fullMD5(file: File): Promise<string> {
   const chunkSize = 4 * 1024 * 1024;
   const hasher = md5.create();
   for (let start = 0; start < file.size; start += chunkSize) {
-    const chunk = await file.slice(start, start + chunkSize).arrayBuffer();
+    const chunk = await file.slice(start, Math.min(start + chunkSize, file.size)).arrayBuffer();
     hasher.update(new Uint8Array(chunk));
   }
   return hasher.hex();

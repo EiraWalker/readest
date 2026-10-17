@@ -56,6 +56,49 @@ afterEach(() => {
 const makeStore = () =>
   createAppLocalStore({ appService, settings: {} as SystemSettings, envConfig });
 
+test('full digests clamp the last read to the native file size', async () => {
+  const close = vi.fn(async () => {});
+  appService.exists = vi.fn(async () => true);
+  appService.openFile = vi.fn(
+    async () =>
+      ({
+        size: 3,
+        slice: (start: number, end: number) => {
+          if (end > 3) throw new RangeError('Native read exceeds EOF');
+          return {
+            arrayBuffer: async () => new TextEncoder().encode('abc').slice(start, end).buffer,
+          };
+        },
+        close,
+      }) as unknown as File,
+  );
+  expect(await makeStore().getBookFileMD5!(makeBook('short'))).toBe(
+    '900150983cd24fb0d6963f7d28e17f72',
+  );
+  expect(close).toHaveBeenCalledTimes(1);
+});
+
+test('full book digests read bounded chunks and close the local file', async () => {
+  const close = vi.fn(async () => {});
+  const slice = vi.fn((start: number, end: number) => ({
+    arrayBuffer: async () => new Uint8Array(end - start).fill(97).buffer,
+  }));
+  const wholeFile = vi.fn(async () => {
+    throw new Error('Whole-file buffering is forbidden');
+  });
+  appService.exists = vi.fn(async () => true);
+  appService.openFile = vi.fn(
+    async () =>
+      ({ size: 32 * 1024 * 1024, slice, arrayBuffer: wholeFile, close }) as unknown as File,
+  );
+  expect(await makeStore().getBookFileMD5!(makeBook('large'))).toBe(
+    'bc3d7c2ff64219e33239f2e13c2d21db',
+  );
+  expect(slice.mock.calls.every(([start, end]) => end - start <= 4 * 1024 * 1024)).toBe(true);
+  expect(wholeFile).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledTimes(1);
+});
+
 describe('createAppLocalStore — library hydration (data-loss guard)', () => {
   test('addBookToLibrary keeps existing on-disk books when the store is unloaded', async () => {
     await makeStore().addBookToLibrary(makeBook('c'));

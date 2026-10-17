@@ -27,6 +27,8 @@ export interface LocalStore {
 
   /** Buffered upload source: the book file bytes, or null when not on disk. */
   loadBookFile(book: Book): Promise<BookBytes | null>;
+  /** Recompute the full local content digest in chunks; do not cache by book identity. */
+  getBookFileMD5?(book: Book): Promise<string | null>;
   /**
    * Streaming upload source: the absolute on-disk path + size of the book
    * file, or null when not on this device. Size lets the engine run the

@@ -2553,5 +2553,7 @@
   "Could not save the prompt template. Please try again.": "无法保存提示词模板，请重试。",
   "The complete selected text.": "完整的所选文字。",
   "Available title, author, chapter, location and link.": "可用的书名、作者、章节、位置和链接。",
-  "Only these two placeholders are replaced. No extra instructions are added.": "仅替换这两个标识符，不会额外添加指令。"
+  "Only these two placeholders are replaced. No extra instructions are added.": "仅替换这两个标识符，不会额外添加指令。",
+  "Already synced: {{title}}": "已同步：{{title}}",
+  "Transferring {{title}}": "正在传输 {{title}}"
 }

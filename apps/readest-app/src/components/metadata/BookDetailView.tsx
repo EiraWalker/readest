@@ -34,6 +34,7 @@ import {
   getSeriesIndex,
 } from '@/utils/book';
 import { isFeedBook } from '@/services/rss/feedBookUrl';
+import { isAudiobook } from '@/utils/audiobook';
 import { saveSysSettings } from '@/helpers/settings';
 import BookCover from '@/components/BookCover';
 import BookCoverViewer, { useBookCoverViewer } from '@/components/BookCoverViewer';
@@ -161,7 +162,7 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
               </button>
             )}
             {/* A feed book is fileless — there is nothing to push (#5307). */}
-            {book.downloadedAt && !isFeedBook(book) && onUpload && (
+            {hasLocalFile && !isFeedBook(book) && !isAudiobook(book) && onUpload && (
               <button onClick={onUpload} title={_('Upload to Cloud')}>
                 <MdOutlineCloudUpload className='fill-base-content' />
               </button>

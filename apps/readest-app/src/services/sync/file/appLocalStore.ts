@@ -4,6 +4,7 @@ import { SystemSettings } from '@/types/settings';
 import { EnvConfigType } from '@/services/environment';
 import { useLibraryStore } from '@/store/libraryStore';
 import { getCoverFilename, getLocalBookFilename } from '@/utils/book';
+import { fullMD5 } from '@/utils/md5';
 import { LocalStore } from './localStore';
 
 /**
@@ -75,6 +76,17 @@ export const createAppLocalStore = ({
     try {
       const bytes = await file.arrayBuffer();
       return { bytes, size: bytes.byteLength };
+    } finally {
+      await (file as File & { close?: () => Promise<void> }).close?.();
+    }
+  },
+
+  getBookFileMD5: async (book) => {
+    const source = await resolveLocalSource(appService, book);
+    if (!source) return null;
+    const file = await appService.openFile(source.path, source.base);
+    try {
+      return await fullMD5(file);
     } finally {
       await (file as File & { close?: () => Promise<void> }).close?.();
     }

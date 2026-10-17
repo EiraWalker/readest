@@ -13,6 +13,8 @@ import {
 } from '@/services/sync/cloudSyncProvider';
 import { isSyncCategoryEnabled } from '@/services/sync/syncCategories';
 import { runFileBookDownload, runFileBookUpload } from '@/services/sync/file/runLibrarySync';
+import { getPrivateS3Identity, isPrivateS3Mode } from '@/services/sync/privateS3';
+import { resolveS3Credentials } from '@/services/sync/providers/s3/credentials';
 
 /**
  * One throttle runs per in-flight transfer, and every emit re-renders the
@@ -91,6 +93,27 @@ export const useBookTransferActions = (
   const handleBookUpload = useCallback(
     async (book: Book, _syncBooks = true) => {
       const settingsNow = useSettingsStore.getState().settings;
+      if (isPrivateS3Mode()) {
+        let configured = !!(
+          getPrivateS3Identity(settingsNow) &&
+          settingsNow.s3.region?.trim() &&
+          settingsNow.s3.credentialRef
+        );
+        if (configured) {
+          try {
+            await resolveS3Credentials(settingsNow.s3);
+          } catch {
+            configured = false;
+          }
+        }
+        if (!configured) {
+          const settingsStore = useSettingsStore.getState();
+          settingsStore.setRequestedPanel('Integrations');
+          settingsStore.setRequestedSubPage(null);
+          settingsStore.setSettingsDialogOpen(true);
+          return false;
+        }
+      }
       const backends = getActiveFileSyncBackends(settingsNow);
       const readest = isReadestCloudEnabled(settingsNow);
       // Peers list a Readest Cloud file only through its `books` row, which is
@@ -99,7 +122,13 @@ export const useBookTransferActions = (
 
       // An explicit Upload must reach EVERY destination the user selected
       // (#5062), not just the first one.
-      const pushed = backends.length > 0 ? await runFileBookUpload(envConfig, book) : false;
+      const tracker = backends.length > 0 ? trackProgress(book.hash) : null;
+      let pushed: Awaited<ReturnType<typeof runFileBookUpload>> = false;
+      try {
+        if (backends.length > 0) pushed = await runFileBookUpload(envConfig, book);
+      } finally {
+        tracker?.done();
+      }
       // Readest Cloud uploads go through the transfer queue (resumable, with its
       // own progress panel), so it reports "queued", not "uploaded".
       const queued = readest && !booksSyncOff ? !!transferManager.queueUpload(book, 1) : false;
@@ -116,7 +145,10 @@ export const useBookTransferActions = (
         eventDispatcher.dispatch('toast', {
           type: 'info',
           timeout: 2000,
-          message: _('Book uploaded: {{title}}', { title: book.title }),
+          message:
+            pushed === 'remote-matches'
+              ? _('Already synced: {{title}}', { title: book.title })
+              : _('Book uploaded: {{title}}', { title: book.title }),
         });
         return true;
       }

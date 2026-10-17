@@ -83,6 +83,83 @@ runSemanticContract('S3Provider', () => {
 });
 
 describe('S3Provider — transport', () => {
+  test('hashes a 32 MiB response incrementally without buffering the body', async () => {
+    const h = makeS3();
+    let remaining = 512;
+    const chunk = new Uint8Array(65536).fill(97);
+    const response = new Response(
+      new ReadableStream({
+        pull(controller) {
+          if (remaining-- > 0) controller.enqueue(chunk);
+          else controller.close();
+        },
+      }),
+    );
+    const buffered = vi.spyOn(response, 'arrayBuffer');
+    h.fetchMock.mockResolvedValueOnce(response);
+    expect(await h.provider.readFileMD5!('/large-stream-md5.epub')).toBe(
+      'bc3d7c2ff64219e33239f2e13c2d21db',
+    );
+    expect(buffered).not.toHaveBeenCalled();
+  });
+
+  test('preserves missing, authentication and interrupted-body outcomes without caching a partial digest', async () => {
+    const h = makeS3();
+    h.fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
+    expect(await h.provider.readFileMD5!('/hash-failures.epub')).toBeNull();
+    h.fetchMock.mockResolvedValueOnce(new Response(null, { status: 403 }));
+    await expect(h.provider.readFileMD5!('/hash-failures.epub')).rejects.toMatchObject({
+      code: 'AUTH_FAILED',
+    });
+    h.fetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            controller.error(new TypeError('Network interrupted'));
+          },
+        }),
+        { headers: { etag: '"interrupted"' } },
+      ),
+    );
+    await expect(
+      h.provider.readFileMD5!('/hash-failures.epub', 'interrupted'),
+    ).rejects.toMatchObject({ code: 'NETWORK' });
+    h.fetchMock.mockResolvedValueOnce(new Response('abc', { headers: { etag: '"interrupted"' } }));
+    expect(await h.provider.readFileMD5!('/hash-failures.epub', 'interrupted')).toBe(
+      '900150983cd24fb0d6963f7d28e17f72',
+    );
+  });
+  test('computes a full content MD5 from a stream and reuses only a verified object version', async () => {
+    const h = makeS3();
+    expect(h.provider.readFileMD5).toBeTypeOf('function');
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('a'));
+          controller.enqueue(new TextEncoder().encode('bc'));
+          controller.close();
+        },
+      }),
+      { headers: { etag: '"verified-version"' } },
+    );
+    const buffered = vi.spyOn(response, 'arrayBuffer');
+    h.fetchMock.mockResolvedValueOnce(response);
+    expect(await h.provider.readFileMD5!('/manual-stream-md5.epub', 'verified-version')).toBe(
+      '900150983cd24fb0d6963f7d28e17f72',
+    );
+    expect(await h.provider.readFileMD5!('/manual-stream-md5.epub', 'verified-version')).toBe(
+      '900150983cd24fb0d6963f7d28e17f72',
+    );
+    expect(buffered).not.toHaveBeenCalled();
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    h.fetchMock.mockResolvedValueOnce(
+      new Response('abd', { headers: { etag: '"changed-version"' } }),
+    );
+    expect(await h.provider.readFileMD5!('/manual-stream-md5.epub', 'changed-version')).toBe(
+      '4911e516e5aa21d327512e0c8b197616',
+    );
+    expect(h.fetchMock).toHaveBeenCalledTimes(2);
+  });
   test('readText GETs the path-style object URL with a SigV4 authorization', async () => {
     const h = makeS3();
     h.fetchMock.mockResolvedValueOnce(text('HELLO'));

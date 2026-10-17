@@ -76,7 +76,9 @@ it.each([
   });
   const target = label === 'Download Book' ? book : { ...book, uploadedAt: undefined };
   render(<BookItem {...props} book={target} />);
-  fireEvent.click(screen.getByRole('button', { name: label }));
+  const transferButton = screen.getByRole('button', { name: label });
+  expect(transferButton.querySelector('svg')).not.toBeNull();
+  fireEvent.click(transferButton);
 
   if (label === 'Download Book') {
     expect(download).toHaveBeenCalledWith(target, { queued: true });
@@ -109,4 +111,54 @@ it('keeps standard signed-in download behavior', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Download Book' }));
   expect(download).toHaveBeenCalledWith(book, { queued: true });
   expect(h.login).not.toHaveBeenCalled();
+});
+
+it.each([
+  'grid',
+  'list',
+] as const)('keeps a visible upload action for an uploaded local book in %s', (mode) => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  const local = { ...book, downloadedAt: 1 };
+  render(<BookItem {...props} mode={mode} book={local} />);
+  const button = screen.getByRole('button', { name: 'Upload Book' });
+  expect(button.querySelector('svg')).not.toBeNull();
+  fireEvent.click(button);
+  expect(upload).toHaveBeenCalledWith(local);
+  expect(props.showBookDetailsModal).not.toHaveBeenCalled();
+  expect(h.router.push).not.toHaveBeenCalled();
+  expect(h.login).not.toHaveBeenCalled();
+});
+
+it.each([
+  { mode: 'grid', key: 'Enter' },
+  { mode: 'grid', key: ' ' },
+  { mode: 'list', key: 'Enter' },
+  { mode: 'list', key: ' ' },
+] as const)('keeps upload keyboard activation separate from opening the $mode card ($key)', ({
+  mode,
+  key,
+}) => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  const local = { ...book, downloadedAt: 1 };
+  const openBook = vi.fn();
+  render(
+    <div
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openBook();
+        }
+      }}
+    >
+      <BookItem {...props} mode={mode} book={local} />
+    </div>,
+  );
+  const button = screen.getByRole('button', { name: 'Upload Book' });
+  button.focus();
+  // jsdom needs the native button's default click to be dispatched explicitly.
+  const defaultAllowed = fireEvent.keyDown(button, { key });
+  fireEvent.keyUp(button, { key });
+  if (defaultAllowed) fireEvent.click(button);
+  expect(upload).toHaveBeenCalledExactlyOnceWith(local);
+  expect(openBook).not.toHaveBeenCalled();
 });

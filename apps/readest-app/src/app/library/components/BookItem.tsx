@@ -17,7 +17,6 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
 import { LibraryCoverFitType, LibraryViewModeType } from '@/types/settings';
 import { navigateToLogin } from '@/utils/nav';
-import { isReadestCloudStorageActive } from '@/services/sync/cloudSyncProvider';
 import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { isFeedBook } from '@/services/rss/feedBookUrl';
 import { isAudiobook } from '@/utils/audiobook';
@@ -96,6 +95,7 @@ const BookItem: React.FC<BookItemProps> = ({
   // transfer buttons, so the cover can never end up showing neither. The
   // entry is removed once the transfer settles, including at 100%.
   const isTransferring = transferProgress !== null;
+  const hasLocalFile = !!book.downloadedAt || !book.uploadedAt;
   const isIndeterminate = transferProgress === INDETERMINATE_PROGRESS;
 
   // ABS books track progress in seconds, not pages, so the row shows a
@@ -162,7 +162,7 @@ const BookItem: React.FC<BookItemProps> = ({
           <div
             className='absolute inset-0 flex items-center justify-center bg-black/40 eink:border eink:border-base-content eink:bg-base-100'
             role='progressbar'
-            aria-label={_('Downloading {{title}}', { title: book.title })}
+            aria-label={_('Transferring {{title}}', { title: book.title })}
             aria-valuenow={isIndeterminate ? undefined : Math.round(transferProgress)}
             aria-valuemin={0}
             aria-valuemax={100}
@@ -321,30 +321,29 @@ const BookItem: React.FC<BookItemProps> = ({
                 // would render forever and Upload would always fail.
                 !isFeedBook(book) &&
                 !isAudiobook(book) &&
-                (!book.uploadedAt || (book.uploadedAt && !book.downloadedAt)) && (
+                (hasLocalFile || book.uploadedAt) && (
                   <button
-                    aria-label={!book.uploadedAt ? _('Upload Book') : _('Download Book')}
+                    aria-label={hasLocalFile ? _('Upload Book') : _('Download Book')}
                     className='show-cloud-button -m-2 p-2'
                     onPointerDown={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') e.stopPropagation();
+                    }}
                     onClick={() => {
-                      if (!syncIdentity) {
+                      if (!syncIdentity && (!hasLocalFile || !isPrivateS3Mode())) {
                         if (isPrivateS3Mode()) router.push('/user?section=sync');
                         else navigateToLogin(router);
                         return;
                       }
-                      if (!book.uploadedAt) {
+                      if (hasLocalFile) {
                         handleBookUpload(book);
                       } else if (!book.downloadedAt) {
                         handleBookDownload(book, { queued: true });
                       }
                     }}
                   >
-                    {!book.uploadedAt && isReadestCloudStorageActive(settings) && (
-                      <LiaCloudUploadAltSolid size={iconSize15} />
-                    )}
-                    {book.uploadedAt && !book.downloadedAt && (
-                      <LiaCloudDownloadAltSolid size={iconSize15} />
-                    )}
+                    {hasLocalFile && <LiaCloudUploadAltSolid size={iconSize15} />}
+                    {!hasLocalFile && <LiaCloudDownloadAltSolid size={iconSize15} />}
                   </button>
                 )}
           </div>

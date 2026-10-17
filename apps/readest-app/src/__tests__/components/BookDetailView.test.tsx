@@ -107,6 +107,11 @@ const renderView = (extra?: Partial<React.ComponentProps<typeof BookDetailView>>
     </DropdownProvider>,
   );
 
+it('does not offer upload for a missing local file even if downloadedAt is stale', () => {
+  const { queryByTitle } = renderView({ fileSize: null, onUpload: vi.fn() });
+  expect(queryByTitle('Upload to Cloud')).toBeNull();
+});
+
 describe('BookDetailView delete dropdown layout', () => {
   it('places dropdown-center on the parent dropdown so the menu stays in flow', () => {
     const { container } = renderView();

@@ -39,6 +39,7 @@ import { isTauriAppPlatform } from '@/services/environment';
 import { tauriDownload, tauriUpload } from '@/utils/transfer';
 import type { ProgressHandler } from '@/utils/transfer';
 import { resolveS3Credentials, type S3Credentials } from './credentials';
+import { md5 } from '@/utils/md5';
 import {
   FileEntry,
   FileHead,
@@ -94,6 +95,9 @@ const MS_PER_SEC = 1000;
 
 /** Lifetime of presigned streaming URLs (seconds) — generous for large books. */
 const PRESIGN_EXPIRES_SEC = 3600;
+// Share verified versions across short-lived engines without persisting content.
+const verifiedContentMD5 = new Map<string, string>();
+const MAX_VERIFIED_CONTENT_VERSIONS = 128;
 
 /** Request-name for error messages; names which operation/path failed. */
 type S3Operation = 'list' | 'download' | 'upload' | 'stat' | 'delete';
@@ -220,6 +224,40 @@ class S3ProviderImpl {
   async readBinary(path: string): Promise<ArrayBuffer | null> {
     const res = await this.getObject(path);
     return res ? res.arrayBuffer() : null;
+  }
+
+  async readFileMD5(path: string, etag?: string): Promise<string | null> {
+    const url = this.urlFor(keyFor(path));
+    const cacheKey = etag && !etag.startsWith('W/') ? `${url}\0${etag}` : null;
+    if (cacheKey && verifiedContentMD5.has(cacheKey)) return verifiedContentMD5.get(cacheKey)!;
+    const res = await this.getObject(path);
+    if (!res) return null;
+    const hash = md5.create();
+    const reader = res.body?.getReader();
+    if (reader) {
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          hash.update(value);
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => {});
+        throw error;
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    const digest = hash.hex();
+    // Associate only with the GET's version: HEAD and GET may race a writer.
+    const version = res.headers.get('etag')?.replace(/^"|"$/g, '');
+    if (version && !version.startsWith('W/')) {
+      verifiedContentMD5.set(`${url}\0${version}`, digest);
+      if (verifiedContentMD5.size > MAX_VERIFIED_CONTENT_VERSIONS) {
+        verifiedContentMD5.delete(verifiedContentMD5.keys().next().value!);
+      }
+    }
+    return digest;
   }
 
   private async getObject(path: string): Promise<Response | null> {
@@ -456,6 +494,7 @@ export const createS3Provider = (
     rootPath: '/',
     readText: (path) => wrap(async () => (await implementation()).readText(path)),
     readBinary: (path) => wrap(async () => (await implementation()).readBinary(path)),
+    readFileMD5: (path, etag) => wrap(async () => (await implementation()).readFileMD5(path, etag)),
     head: (path) => wrap(async () => (await implementation()).head(path)),
     list: (path) => wrap(async () => (await implementation()).list(path)),
     writeText: (path, body, contentType) =>

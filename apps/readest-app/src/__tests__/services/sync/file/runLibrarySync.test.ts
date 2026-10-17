@@ -232,7 +232,7 @@ describe('runFileBookUpload', () => {
   });
 
   test('pushes the book to every enabled backend', async () => {
-    expect(await runFileBookUpload(envConfig, makeBook('h1'))).toBe(true);
+    expect(await runFileBookUpload(envConfig, makeBook('h1'))).toBe('uploaded');
     expect(pushBookFile).toHaveBeenCalledTimes(2);
   });
 
@@ -240,7 +240,7 @@ describe('runFileBookUpload', () => {
     pushBookFile
       .mockRejectedValueOnce(new Error('drive is down'))
       .mockResolvedValueOnce({ uploaded: true });
-    expect(await runFileBookUpload(envConfig, makeBook('h1'))).toBe(true);
+    expect(await runFileBookUpload(envConfig, makeBook('h1'))).toBe('uploaded');
   });
 
   test('fails when no backend takes the book', async () => {
@@ -252,7 +252,7 @@ describe('runFileBookUpload', () => {
     pushBookFile
       .mockResolvedValueOnce({ uploaded: false, reason: 'remote-matches' })
       .mockResolvedValueOnce({ uploaded: false, reason: 'no-source' });
-    expect(await runFileBookUpload(envConfig, makeBook('h1'))).toBe(true);
+    expect(await runFileBookUpload(envConfig, makeBook('h1'))).toBe('remote-matches');
   });
 });
 

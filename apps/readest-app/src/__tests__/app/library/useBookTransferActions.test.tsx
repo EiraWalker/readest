@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { SetStateAction } from 'react';
 
@@ -6,6 +6,8 @@ import type { Book } from '@/types/book';
 import type { EnvConfigType } from '@/services/environment';
 import type { AppService } from '@/types/system';
 import { INDETERMINATE_PROGRESS, type ProgressHandler } from '@/utils/transfer';
+import { useSettingsStore } from '@/store/settingsStore';
+import { DEFAULT_SYSTEM_SETTINGS } from '@/services/constants';
 
 /**
  * Issue #5062 — cloud sync providers are independently selectable, so a
@@ -23,7 +25,9 @@ const routing = vi.hoisted(() => ({
   backends: [] as ('webdav' | 'gdrive' | 's3' | 'onedrive')[],
 }));
 
-const runFileBookUpload = vi.hoisted(() => vi.fn(async () => true));
+const runFileBookUpload = vi.hoisted(() =>
+  vi.fn<() => Promise<'uploaded' | 'remote-matches' | false>>(async () => 'uploaded'),
+);
 const runFileBookDownload = vi.hoisted(() =>
   vi.fn(
     async (
@@ -35,6 +39,8 @@ const runFileBookDownload = vi.hoisted(() =>
 );
 const queueUpload = vi.hoisted(() => vi.fn(() => 'transfer-1'));
 const queueDownload = vi.hoisted(() => vi.fn(() => 'transfer-1'));
+const resolveS3Credentials = vi.hoisted(() => vi.fn(async () => ({})));
+vi.mock('@/services/sync/providers/s3/credentials', () => ({ resolveS3Credentials }));
 
 vi.mock('@/hooks/useTranslation', () => ({
   useTranslation:
@@ -101,13 +107,132 @@ const setup = (appService: AppService | null = null) => {
 };
 
 beforeEach(() => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'false');
   vi.clearAllMocks();
   routing.readestEnabled = true;
   routing.booksSyncEnabled = true;
   routing.backends = [];
 });
+afterEach(() => vi.unstubAllEnvs());
+
+it('opens Integrations for a disabled private service without enabling or scheduling an upload', async () => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  routing.readestEnabled = false;
+  useSettingsStore.setState({
+    settings: {
+      ...useSettingsStore.getState().settings,
+      ...DEFAULT_SYSTEM_SETTINGS,
+      s3: { endpoint: '', bucket: '', enabled: false },
+    },
+    isSettingsDialogOpen: false,
+    requestedPanel: null,
+    requestedSubPage: 's3',
+  });
+  const { result } = setup();
+  expect(await result.current.handleBookUpload(makeBook())).toBe(false);
+  expect(useSettingsStore.getState()).toMatchObject({
+    isSettingsDialogOpen: true,
+    requestedPanel: 'Integrations',
+    requestedSubPage: null,
+    settings: { s3: { enabled: false } },
+  });
+  expect(runFileBookUpload).not.toHaveBeenCalled();
+  expect(queueUpload).not.toHaveBeenCalled();
+});
+
+it.each([
+  { enabled: false },
+  { endpoint: '' },
+  { bucket: '' },
+  { endpoint: 'http://s3.example.com' },
+  { credentialRef: '' },
+])('opens Integrations for an incomplete private connection: %j', async (overrides) => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  routing.readestEnabled = false;
+  routing.backends = ['s3'];
+  const s3 = {
+    enabled: true,
+    endpoint: 'https://s3.example.com',
+    region: 'cn-north-1',
+    bucket: 'fixture',
+    credentialRef: 'readest-private-s3:fixture',
+    ...overrides,
+  };
+  useSettingsStore.setState({
+    settings: { ...useSettingsStore.getState().settings, s3 },
+    isSettingsDialogOpen: false,
+  });
+  const { result } = setup();
+  expect(await result.current.handleBookUpload(makeBook())).toBe(false);
+  expect(useSettingsStore.getState()).toMatchObject({
+    isSettingsDialogOpen: true,
+    requestedPanel: 'Integrations',
+    requestedSubPage: null,
+    settings: { s3 },
+  });
+  useSettingsStore.setState({
+    settings: {
+      ...useSettingsStore.getState().settings,
+      s3: {
+        ...s3,
+        enabled: true,
+        endpoint: 'https://s3.example.com',
+        bucket: 'fixture',
+        credentialRef: 'readest-private-s3:fixture',
+      },
+    },
+  });
+  await Promise.resolve();
+  expect(runFileBookUpload).not.toHaveBeenCalled();
+  expect(queueUpload).not.toHaveBeenCalled();
+  expect(await result.current.handleBookUpload(makeBook())).toBe(true);
+  expect(runFileBookUpload).toHaveBeenCalledTimes(1);
+  expect(queueUpload).not.toHaveBeenCalled();
+});
+
+it('opens Integrations if the saved private credentials are unavailable on this device', async () => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  routing.readestEnabled = false;
+  routing.backends = ['s3'];
+  useSettingsStore.setState({
+    settings: {
+      ...useSettingsStore.getState().settings,
+      s3: {
+        enabled: true,
+        endpoint: 'https://s3.example.com',
+        region: 'cn-north-1',
+        bucket: 'fixture',
+        credentialRef: 'readest-private-s3:fixture',
+      },
+    },
+    isSettingsDialogOpen: false,
+  });
+  resolveS3Credentials.mockRejectedValueOnce(new Error('Credentials unavailable'));
+  const { result } = setup();
+  expect(await result.current.handleBookUpload(makeBook())).toBe(false);
+  expect(useSettingsStore.getState()).toMatchObject({
+    isSettingsDialogOpen: true,
+    requestedPanel: 'Integrations',
+    requestedSubPage: null,
+  });
+  expect(runFileBookUpload).not.toHaveBeenCalled();
+  expect(queueUpload).not.toHaveBeenCalled();
+});
 
 describe('useBookTransferActions upload routing (issue #5062)', () => {
+  it('reports already synced when the file backend verifies unchanged content', async () => {
+    routing.readestEnabled = false;
+    routing.backends = ['s3'];
+    runFileBookUpload.mockResolvedValueOnce('remote-matches');
+    const dispatchSpy = vi.spyOn(eventDispatcher, 'dispatch');
+    const { result, getProgress } = setup();
+    expect(await result.current.handleBookUpload(makeBook())).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'toast',
+      expect.objectContaining({ message: 'Already synced: Title' }),
+    );
+    expect(getProgress()).toEqual({});
+  });
   it('reaches every enabled destination when Readest Cloud and a file backend are both on', async () => {
     routing.readestEnabled = true;
     routing.backends = ['gdrive'];
