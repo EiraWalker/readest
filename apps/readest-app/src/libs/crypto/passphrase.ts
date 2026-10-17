@@ -1,10 +1,14 @@
 import { SyncError } from '@/libs/errors';
 import { isTauriAppPlatform } from '@/services/environment';
+import { getPrivateS3Identity, isPrivateS3Mode } from '@/services/sync/privateS3';
 import {
   clearSyncPassphrase,
   getSyncPassphrase,
   isSyncKeychainAvailable,
   setSyncPassphrase,
+  setSecureItem,
+  getSecureItem,
+  clearSecureItem,
 } from '@/utils/bridge';
 
 export interface PassphraseStore {
@@ -64,8 +68,17 @@ export class EphemeralPassphraseStore implements PassphraseStore {
  * keychain errors return null so the gate falls back to prompting.
  */
 export class TauriPassphraseStore implements PassphraseStore {
+  private async privateKey(): Promise<string> {
+    const { useSettingsStore } = await import('@/store/settingsStore');
+    const spaceId = getPrivateS3Identity(useSettingsStore.getState().settings);
+    if (!spaceId) throw new SyncError('CRYPTO_UNAVAILABLE', 'Private S3 is not configured');
+    return `readest-private-s3:passphrase:${spaceId}`;
+  }
+
   async set(passphrase: string): Promise<void> {
-    const res = await setSyncPassphrase({ passphrase });
+    const res = isPrivateS3Mode()
+      ? await setSecureItem({ key: await this.privateKey(), value: passphrase })
+      : await setSyncPassphrase({ passphrase });
     if (!res.success) {
       throw new SyncError(
         'CRYPTO_UNAVAILABLE',
@@ -76,6 +89,10 @@ export class TauriPassphraseStore implements PassphraseStore {
 
   async get(): Promise<string | null> {
     try {
+      if (isPrivateS3Mode()) {
+        const res = await getSecureItem({ key: await this.privateKey() });
+        return res.value ?? null;
+      }
       const res = await getSyncPassphrase();
       if (res.error) {
         console.warn('[passphrase] keychain get failed', res.error);
@@ -90,6 +107,10 @@ export class TauriPassphraseStore implements PassphraseStore {
 
   async clear(): Promise<void> {
     try {
+      if (isPrivateS3Mode()) {
+        await clearSecureItem({ key: await this.privateKey() });
+        return;
+      }
       await clearSyncPassphrase();
     } catch (err) {
       console.warn('[passphrase] keychain clear threw', err);

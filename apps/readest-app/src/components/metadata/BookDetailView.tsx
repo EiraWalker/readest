@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import React, { useState } from 'react';
 import {
   MdOutlineCloudDownload,
@@ -239,7 +240,7 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
                     openExternalUrl(getGoodreadsSearchUrl(getBookGoodreadsQuery(book)))
                   }
                 />
-                {onShare && (
+                {onShare && !isPrivateS3Mode() && (
                   <MenuItem
                     noIcon
                     transient

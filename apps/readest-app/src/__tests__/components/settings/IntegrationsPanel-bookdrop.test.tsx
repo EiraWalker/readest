@@ -1,5 +1,8 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SystemSettings } from '@/types/settings';
+
+let panelSettings: Partial<SystemSettings> = {};
 
 /**
  * #6360: Nearby BookDrop is on by default and binds a LAN listener, yet it sat
@@ -22,7 +25,7 @@ vi.mock('@/hooks/useQuotaStats', () => ({
 }));
 vi.mock('@/store/settingsStore', () => ({
   useSettingsStore: () => ({
-    settings: {},
+    settings: panelSettings,
     requestedSubPage: null,
     setRequestedSubPage: vi.fn(),
   }),
@@ -43,6 +46,7 @@ const bookDropSection = () =>
   document.querySelector('[data-setting-id="settings.integrations.localsend"]') as HTMLElement;
 
 beforeEach(() => {
+  panelSettings = {};
   localStorage.clear();
   useLocalSendStore.setState({ status: null });
 });
@@ -50,6 +54,32 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+it('removes official cloud and email integrations in the private S3 build', () => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  render(<IntegrationsPanel />);
+  expect(screen.queryByText('Readest Cloud')).toBeNull();
+  expect(screen.queryByText('Send to Readest')).toBeNull();
+  expect(screen.getByText('S3 Storage')).toBeTruthy();
+  expect(screen.getByText('Manage Sync')).toBeTruthy();
+  expect(screen.getByText('Nearby BookDrop')).toBeTruthy();
+});
+
+it('can re-enable a configured S3 connection backed by a native credential reference', () => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  panelSettings = {
+    s3: {
+      enabled: false,
+      endpoint: 'https://s3.example.com',
+      bucket: 'books',
+      credentialRef: 'local-reference',
+    },
+  };
+  render(<IntegrationsPanel />);
+  expect(screen.getByLabelText<HTMLInputElement>('Sync with S3').disabled).toBe(false);
+  expect(screen.getByText('Configured')).toBeTruthy();
 });
 
 describe('IntegrationsPanel Nearby BookDrop section', () => {

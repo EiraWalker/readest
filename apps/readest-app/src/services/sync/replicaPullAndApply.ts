@@ -39,8 +39,20 @@ export interface PullAndApplyDeps<T extends ReplicaLocalRecord> {
   pull(): Promise<ReplicaRow[]>;
   /** Looks up an existing local record by its cross-device contentId. */
   findByContentId(contentId: string): T | undefined;
+  /**
+   * Rejects an obsolete pull before prompting/decrypting and again just
+   * before projection, since local edits can occur during an awaited decrypt.
+   * A rejected row is not acknowledged and remains eligible for retry.
+   */
+  canApplyRow?(row: ReplicaRow): boolean | Promise<boolean>;
   /** Adds a remote-sourced record to the local store WITHOUT republishing. */
   applyRemote(record: T): void;
+  /**
+   * Acknowledges a metadata row after its local projection succeeds. The
+   * original pull object is preserved for transport identity tracking. This
+   * does not promise persistence by stores whose applyRemote saves async.
+   */
+  onRowApplied?(row: ReplicaRow): void | Promise<void>;
   /**
    * Tombstones the local entry whose contentId matches. Implementer
    * looks up by contentId and removes it from the local store, but
@@ -135,6 +147,7 @@ const applyRow = async <T extends ReplicaLocalRecord>(
   row: ReplicaRow,
   deps: PullAndApplyDeps<T>,
 ): Promise<void> => {
+  if (deps.canApplyRow && !(await deps.canApplyRow(row))) return;
   const local = deps.findByContentId(row.replica_id);
 
   // Decrypt encrypted-field cipher payloads in place so unpackRow sees
@@ -198,6 +211,18 @@ const applyRow = async <T extends ReplicaLocalRecord>(
   // decrypt leaves the previous fingerprint in place so we'll re-try
   // (and re-prompt) on the next pull.
   const decryptedThisRound = collectDecryptSuccess(row.fields_jsonb, beforeDecrypt);
+  // Intentional credentials opt-out has no pending cipher work: a later
+  // category change invalidates the transport's acknowledgements. A locked,
+  // cancelled or failed decrypt must remain eligible for the same-row retry
+  // unless that exact cipher was already successfully applied locally.
+  // Binary rows always remain replayable for manifest/file/queue repair.
+  const canAcknowledge =
+    !deps.adapter.binary &&
+    Object.keys(beforeDecrypt).every(
+      (field) =>
+        decryptedThisRound[field] === beforeDecrypt[field] ||
+        localLastSeen?.[field] === beforeDecrypt[field],
+    );
   const mergedLastSeen =
     Object.keys(decryptedThisRound).length > 0 || localLastSeen
       ? { ...(localLastSeen ?? {}), ...decryptedThisRound }
@@ -216,7 +241,9 @@ const applyRow = async <T extends ReplicaLocalRecord>(
     // even though its dict row arrives tombstoned. Other kinds (font,
     // texture, opds_catalog, abs_server) self-no-op when no local
     // exists, so the unconditional call is safe.
+    if (deps.canApplyRow && !(await deps.canApplyRow(row))) return;
     deps.softDeleteByContentId(row.replica_id);
+    if (canAcknowledge) await deps.onRowApplied?.(row);
     return;
   }
 
@@ -245,7 +272,9 @@ const applyRow = async <T extends ReplicaLocalRecord>(
       const record = deps.adapter.unpackRow(row, bundleDir);
       if (record) {
         if (mergedLastSeen) record.lastSeenCipher = mergedLastSeen;
+        if (deps.canApplyRow && !(await deps.canApplyRow(row))) return;
         deps.applyRemote(record);
+        if (canAcknowledge) await deps.onRowApplied?.(row);
       }
     }
   } else {
@@ -253,7 +282,9 @@ const applyRow = async <T extends ReplicaLocalRecord>(
     const record = deps.adapter.unpackRow(row, bundleDir);
     if (!record) return;
     if (mergedLastSeen) record.lastSeenCipher = mergedLastSeen;
+    if (deps.canApplyRow && !(await deps.canApplyRow(row))) return;
     deps.applyRemote(record);
+    if (canAcknowledge) await deps.onRowApplied?.(row);
     displayName = deps.adapter.getDisplayName?.(record) ?? record.name;
   }
 

@@ -2,6 +2,7 @@ import type { SystemSettings } from '@/types/settings';
 import type { ReplicaAdapter } from '@/services/sync/replicaRegistry';
 import type { FieldsObject, ReplicaRow } from '@/types/replica';
 import { serializeCustomHeaders, deserializeCustomHeaders } from '@/utils/customHeaders';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { unwrap } from './helpers';
 
 export const SETTINGS_KIND = 'settings';
@@ -82,16 +83,13 @@ export const SETTINGS_WHITELIST = [
   'webdav.username',
   'webdav.password',
   'webdav.rootPath',
-  // S3-compatible object store. endpoint / region / bucket sync as plaintext so
-  // a fresh device pre-fills the connect form; accessKeyId / secretAccessKey are
-  // listed in `encryptedFields` below. Per-device bookkeeping (enabled,
+  // S3 connection coordinates may pre-fill another device. Access keys and
+  // native-store references always stay local. Per-device bookkeeping (enabled,
   // deviceId, lastSyncedAt, providerSelectedAt, sync sub-toggles) is
   // deliberately excluded — mirrors WebDAV.
   's3.endpoint',
   's3.region',
   's3.bucket',
-  's3.accessKeyId',
-  's3.secretAccessKey',
 ] as const;
 
 /**
@@ -153,11 +151,15 @@ export const SETTINGS_ENCRYPTED_FIELDS = [
   'notion.accessToken',
   'webdav.username',
   'webdav.password',
-  's3.accessKeyId',
-  's3.secretAccessKey',
 ] as const;
 
 export type SettingsWhitelistKey = (typeof SETTINGS_WHITELIST)[number];
+
+/** The private library's connection is bound locally, never changed by a peer. */
+export const getSyncedSettingsPaths = (): readonly SettingsWhitelistKey[] =>
+  isPrivateS3Mode()
+    ? SETTINGS_WHITELIST.filter((path) => !path.startsWith('s3.'))
+    : SETTINGS_WHITELIST;
 
 /**
  * `encryptPackedFields` / `decryptRowFields` only handle string-valued
@@ -239,7 +241,7 @@ const deserializeObjectValuedPaths = (patch: Record<string, unknown>): void => {
 
 const unwrapSettingsFields = (fields: FieldsObject): Record<string, unknown> => {
   const out: Record<string, unknown> = {};
-  for (const path of SETTINGS_WHITELIST) {
+  for (const path of getSyncedSettingsPaths()) {
     const v = unwrap(fields[path]);
     if (v !== undefined) out[path] = v;
   }
@@ -253,7 +255,7 @@ export const settingsAdapter: ReplicaAdapter<SettingsRemoteRecord> = {
 
   pack(record: SettingsRemoteRecord): Record<string, unknown> {
     const fields: Record<string, unknown> = {};
-    for (const path of SETTINGS_WHITELIST) {
+    for (const path of getSyncedSettingsPaths()) {
       const value = readPath(record.patch, path);
       if (value !== undefined) fields[path] = value;
     }
@@ -271,7 +273,7 @@ export const settingsAdapter: ReplicaAdapter<SettingsRemoteRecord> = {
 
   unpack(fields: Record<string, unknown>): SettingsRemoteRecord {
     const patch: Record<string, unknown> = {};
-    for (const path of SETTINGS_WHITELIST) {
+    for (const path of getSyncedSettingsPaths()) {
       const v = fields[path];
       if (v !== undefined) writePath(patch, path, v);
     }

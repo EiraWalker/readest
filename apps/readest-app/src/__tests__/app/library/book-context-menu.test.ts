@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getBookContextMenuItemIds } from '@/app/library/utils/libraryUtils';
 import { buildFeedBookUrl } from '@/services/rss/feedBookUrl';
@@ -14,7 +14,25 @@ const createBook = (overrides: Partial<Book> = {}): Book => ({
   ...overrides,
 });
 
+beforeEach(() => vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'false'));
+afterEach(() => vi.unstubAllEnvs());
+
 describe('getBookContextMenuItemIds', () => {
+  it.each([
+    { downloadedAt: 1 },
+    { uploadedAt: 1 },
+  ])('hides official sharing for private books %j while keeping file transfers', (availability) => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    const ids = getBookContextMenuItemIds(createBook(availability), { localSend: true });
+    expect(ids).not.toContain('share');
+    if ('downloadedAt' in availability) {
+      expect(ids).toContain('upload');
+      expect(ids).toContain('sendNearby');
+    } else {
+      expect(ids).toContain('download');
+    }
+  });
+
   it('returns a deterministic order for a local downloaded book', () => {
     const book = createBook({ downloadedAt: 1 });
     expect(getBookContextMenuItemIds(book)).toEqual([

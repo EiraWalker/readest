@@ -27,6 +27,8 @@ import { authWithCustomTab, authWithSafari } from './utils/nativeAuth';
 import WindowButtons from '@/components/WindowButtons';
 import type { OAuthProvider } from './components/ProviderLogin';
 import AuthPanel from './components/AuthPanel';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
+import { PrivateSyncPage } from '../user/components/PrivateSyncPage';
 
 interface SingleInstancePayload {
   args: string[];
@@ -38,6 +40,10 @@ const DEEPLINK_CALLBACK = 'readest://auth-callback';
 const USE_APPLE_SIGN_IN = process.env['NEXT_PUBLIC_USE_APPLE_SIGN_IN'] === 'true';
 
 export default function AuthPage() {
+  return isPrivateS3Mode() ? <PrivateSyncPage /> : <OfficialAuthPage />;
+}
+
+function OfficialAuthPage() {
   const _ = useTranslation();
   const router = useRouter();
   const { login } = useAuth();

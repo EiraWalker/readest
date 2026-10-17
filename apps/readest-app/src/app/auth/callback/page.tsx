@@ -4,8 +4,14 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { handleAuthCallback } from '@/helpers/auth';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
+import { PrivateSyncPage } from '@/app/user/components/PrivateSyncPage';
 
 export default function AuthCallback() {
+  return isPrivateS3Mode() ? <PrivateSyncPage /> : <OfficialAuthCallback />;
+}
+
+function OfficialAuthCallback() {
   const router = useRouter();
   const { login } = useAuth();
 

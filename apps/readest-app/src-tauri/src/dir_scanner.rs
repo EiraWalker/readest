@@ -128,7 +128,7 @@ mod tests {
     fn scan_preserves_requested_root_spelling() {
         let root = std::env::temp_dir().join(format!("readest-scan-{}", std::process::id()));
         std::fs::create_dir_all(root.join("nested")).unwrap();
-        std::fs::write(root.join("nested/book.epub"), b"book").unwrap();
+        std::fs::write(root.join("nested").join("book.epub"), b"book").unwrap();
         let canonical = root.canonicalize().unwrap();
         let requested = root.join("alias");
         let files = read_dir_sync(
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(
             files[0].path,
-            requested.join("nested/book.epub").to_string_lossy()
+            requested.join("nested").join("book.epub").to_string_lossy()
         );
         std::fs::remove_dir_all(root).unwrap();
     }

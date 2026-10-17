@@ -1,5 +1,6 @@
 import { SystemSettings } from '@/types/settings';
 import { applySyncBooksAutoEnable } from '@/services/sync/cloudSyncProvider';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import {
   AppPlatform,
   AppService,
@@ -491,6 +492,10 @@ export abstract class BaseAppService implements AppService {
     base: BaseDir,
     onProgress: ProgressHandler,
   ) {
+    if (isPrivateS3Mode()) {
+      const { uploadS3ReplicaFile } = await import('./sync/s3ReplicaFiles');
+      return uploadS3ReplicaFile(this, kind, replicaId, filename, lfp, base, onProgress);
+    }
     return CloudSvc.uploadReplicaFileToCloud(this.fs, this.resolveFilePath.bind(this), {
       kind,
       replicaId,
@@ -509,6 +514,10 @@ export abstract class BaseAppService implements AppService {
     base: BaseDir,
     onProgress?: ProgressHandler,
   ) {
+    if (isPrivateS3Mode()) {
+      const { downloadS3ReplicaFile } = await import('./sync/s3ReplicaFiles');
+      return downloadS3ReplicaFile(this, kind, replicaId, filename, lfp, base, onProgress);
+    }
     // The native downloader writes with `File::create`, which does not create
     // parent directories, so a missing bundle dir fails as an opaque
     // "No such file or directory (os error 2)" (issue #5675). The pull path
@@ -538,6 +547,9 @@ export abstract class BaseAppService implements AppService {
   }
 
   async deleteReplicaBundle(kind: string, replicaId: string, filenames: string[]) {
+    if (isPrivateS3Mode()) {
+      return (await import('./sync/s3ReplicaFiles')).deleteS3ReplicaBundle(kind, replicaId);
+    }
     return CloudSvc.deleteReplicaBundleFromCloud(kind, replicaId, filenames);
   }
 

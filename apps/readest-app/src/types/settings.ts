@@ -269,8 +269,8 @@ export interface GoogleDriveSettings {
  * backend alongside {@link WebDAVSettings} and {@link GoogleDriveSettings},
  * sharing the same engine, sub-toggles, and strategy vocabulary. Covers any
  * SigV4 endpoint: Cloudflare R2, AWS S3, MinIO, Backblaze B2. Addressing is
- * path-style (`<endpoint>/<bucket>/<key>`). Credentials live here like
- * WebDAV's (same encrypted cross-device credential-sync semantics).
+ * path-style (`<endpoint>/<bucket>/<key>`). Private/native connections use secure
+ * storage; standard web and legacy settings keep their local credential fields.
  */
 export interface S3Settings {
   enabled: boolean;
@@ -279,8 +279,10 @@ export interface S3Settings {
   /** SigV4 region; 'auto' works for R2/MinIO, AWS wants the bucket region. */
   region?: string;
   bucket: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+  /** Standard web / legacy credentials; the private build never persists these. */
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  credentialRef?: string;
   syncProgress?: boolean;
   syncNotes?: boolean;
   syncBooks?: boolean;

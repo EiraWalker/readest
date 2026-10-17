@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
+import type { ReplicaRow, Hlc } from '@/types/replica';
+import type { PullAndApplyDeps, ReplicaLocalRecord } from '@/services/sync/replicaPullAndApply';
 
 const pullSpy = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 const getReplicaSyncSpy = vi.fn();
 const getAccessTokenSpy = vi.fn(async (): Promise<string | null> => 'token');
 const replayBookshelvesSpy = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 const applyBookshelvesSpy = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
+const acknowledgePullSpy = vi.fn<(row: ReplicaRow) => Promise<void>>(async () => {});
+const canApplyPullSpy = vi.fn<(row: ReplicaRow) => Promise<boolean>>(async () => true);
+const applyCatalogSpy = vi.fn<(...args: unknown[]) => void>(() => {});
+let privateMode = false;
 const readyListeners = new Set<() => void>();
 const subscribeReplicaSyncReadySpy = vi.fn((listener: () => void) => {
   if (getReplicaSyncSpy()) {
@@ -30,6 +36,18 @@ let authValue: { user: { id: string } | null } = { user: { id: 'test-user' } };
 
 vi.mock('@/services/sync/replicaPullAndApply', () => ({
   replicaPullAndApply: (...args: unknown[]) => pullSpy(...args),
+}));
+
+vi.mock('@/libs/replicaSyncClient', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/libs/replicaSyncClient')>()),
+  acknowledgeReplicaPull: (row: ReplicaRow) => acknowledgePullSpy(row),
+  canApplyReplicaPull: (row: ReplicaRow) => canApplyPullSpy(row),
+}));
+
+vi.mock('@/services/sync/privateS3', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/sync/privateS3')>()),
+  isPrivateS3Mode: () => privateMode,
+  getPrivateS3Identity: () => (privateMode ? 'private-space' : null),
 }));
 
 vi.mock('@/services/sync/adapters/dictionary', () => ({
@@ -91,7 +109,7 @@ vi.mock('@/store/customTextureStore', () => ({
 vi.mock('@/store/customOPDSStore', () => ({
   useCustomOPDSStore: {
     getState: () => ({
-      applyRemoteCatalog: vi.fn(),
+      applyRemoteCatalog: (...args: unknown[]) => applyCatalogSpy(...args),
       softDeleteByContentId: vi.fn(),
       loadCustomOPDSCatalogs: vi.fn(async () => {}),
     }),
@@ -101,6 +119,7 @@ vi.mock('@/store/customOPDSStore', () => ({
 
 vi.mock('@/utils/access', () => ({
   getAccessToken: () => getAccessTokenSpy(),
+  getUserID: async () => 'private-space',
 }));
 
 vi.mock('@/services/bookshelves/persistence', () => ({
@@ -151,6 +170,10 @@ beforeEach(() => {
   getAccessTokenSpy.mockReset().mockResolvedValue('token');
   replayBookshelvesSpy.mockClear();
   applyBookshelvesSpy.mockClear();
+  acknowledgePullSpy.mockClear();
+  canApplyPullSpy.mockReset().mockResolvedValue(true);
+  applyCatalogSpy.mockReset();
+  privateMode = false;
   subscribeReplicaSyncReadySpy.mockClear();
   readyListeners.clear();
   __resetReplicaPullForTests();
@@ -164,6 +187,219 @@ afterEach(() => {
 });
 
 describe('useReplicaPull', () => {
+  test.each([
+    true,
+    false,
+  ])('acknowledges successful metadata only in private mode (%s)', async (privateEnabled) => {
+    privateMode = privateEnabled;
+    const timestamp = '0000000000001-00000000-remote' as Hlc;
+    const row: ReplicaRow = {
+      user_id: 'private-space',
+      kind: 'opds_catalog',
+      replica_id: 'catalog-1',
+      fields_jsonb: {
+        name: { v: 'Remote catalog', t: timestamp, s: 'remote' },
+        url: { v: 'https://catalog.invalid/opds', t: timestamp, s: 'remote' },
+      },
+      manifest_jsonb: null,
+      deleted_at_ts: null,
+      reincarnation: null,
+      updated_at_ts: timestamp,
+      schema_version: 1,
+    };
+    const actual = await vi.importActual<typeof import('@/services/sync/replicaPullAndApply')>(
+      '@/services/sync/replicaPullAndApply',
+    );
+    pullSpy.mockImplementation(async (candidate) => {
+      const deps = candidate as PullAndApplyDeps<ReplicaLocalRecord>;
+      if (deps.adapter.kind !== 'settings') await actual.replicaPullAndApply(deps);
+    });
+    const manager = makeManagerMock();
+    manager.pullMany.mockResolvedValue(new Map([['opds_catalog', [row]]]));
+    getReplicaSyncSpy.mockReturnValue({ manager });
+    renderHook(() => useReplicaPull({ kinds: ['opds_catalog'], delayMs: 100 }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    expect(applyCatalogSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Remote catalog' }),
+    );
+    if (privateEnabled) {
+      expect(acknowledgePullSpy).toHaveBeenCalledOnce();
+      expect(acknowledgePullSpy.mock.calls[0]![0]).toBe(row);
+    } else {
+      expect(acknowledgePullSpy).not.toHaveBeenCalled();
+      expect(canApplyPullSpy).not.toHaveBeenCalled();
+    }
+  });
+
+  test('defers a guarded private metadata row without projecting or acknowledging, then retries it', async () => {
+    privateMode = true;
+    const timestamp = '0000000000001-00000000-remote' as Hlc;
+    const row: ReplicaRow = {
+      user_id: 'private-space',
+      kind: 'opds_catalog',
+      replica_id: 'catalog-1',
+      fields_jsonb: {
+        name: { v: 'Remote catalog', t: timestamp, s: 'remote' },
+        url: { v: 'https://catalog.invalid/opds', t: timestamp, s: 'remote' },
+      },
+      manifest_jsonb: null,
+      deleted_at_ts: null,
+      reincarnation: null,
+      updated_at_ts: timestamp,
+      schema_version: 1,
+    };
+    const actual = await vi.importActual<typeof import('@/services/sync/replicaPullAndApply')>(
+      '@/services/sync/replicaPullAndApply',
+    );
+    pullSpy.mockImplementation(async (candidate) => {
+      const deps = candidate as PullAndApplyDeps<ReplicaLocalRecord>;
+      if (deps.adapter.kind !== 'settings') await actual.replicaPullAndApply(deps);
+    });
+    canApplyPullSpy.mockResolvedValue(false);
+    const manager = makeManagerMock();
+    manager.pullMany.mockResolvedValue(new Map([['opds_catalog', [row]]]));
+    getReplicaSyncSpy.mockReturnValue({ manager });
+    renderHook(() => useReplicaPull({ kinds: ['opds_catalog'], delayMs: 100 }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    expect(applyCatalogSpy).not.toHaveBeenCalled();
+    expect(acknowledgePullSpy).not.toHaveBeenCalled();
+    expect(canApplyPullSpy.mock.calls[0]![0]).toBe(row);
+    canApplyPullSpy.mockResolvedValue(true);
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(applyCatalogSpy).toHaveBeenCalledOnce();
+    expect(acknowledgePullSpy).toHaveBeenCalledOnce();
+    expect(acknowledgePullSpy.mock.calls[0]![0]).toBe(row);
+  });
+
+  test('keeps a failed private metadata projection unacknowledged until a later pull succeeds', async () => {
+    privateMode = true;
+    const timestamp = '0000000000001-00000000-remote' as Hlc;
+    const row: ReplicaRow = {
+      user_id: 'private-space',
+      kind: 'opds_catalog',
+      replica_id: 'catalog-1',
+      fields_jsonb: {
+        name: { v: 'Remote catalog', t: timestamp, s: 'remote' },
+        url: { v: 'https://catalog.invalid/opds', t: timestamp, s: 'remote' },
+      },
+      manifest_jsonb: null,
+      deleted_at_ts: null,
+      reincarnation: null,
+      updated_at_ts: timestamp,
+      schema_version: 1,
+    };
+    const actual = await vi.importActual<typeof import('@/services/sync/replicaPullAndApply')>(
+      '@/services/sync/replicaPullAndApply',
+    );
+    pullSpy.mockImplementation(async (candidate) => {
+      const deps = candidate as PullAndApplyDeps<ReplicaLocalRecord>;
+      if (deps.adapter.kind !== 'settings') await actual.replicaPullAndApply(deps);
+    });
+    applyCatalogSpy.mockImplementationOnce(() => {
+      throw new Error('Local projection failed');
+    });
+    const manager = makeManagerMock();
+    manager.pullMany.mockResolvedValue(new Map([['opds_catalog', [row]]]));
+    getReplicaSyncSpy.mockReturnValue({ manager });
+    renderHook(() => useReplicaPull({ kinds: ['opds_catalog'], delayMs: 100 }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(applyCatalogSpy).toHaveBeenCalledOnce();
+    expect(acknowledgePullSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(applyCatalogSpy).toHaveBeenCalledTimes(2);
+    expect(acknowledgePullSpy).toHaveBeenCalledOnce();
+    expect(acknowledgePullSpy.mock.calls[0]![0]).toBe(row);
+  });
+
+  test('acknowledges valid private bookshelf rows only after their asynchronous persistence succeeds', async () => {
+    privateMode = true;
+    const timestamp = '0000000000001-00000000-remote' as Hlc;
+    const row: ReplicaRow = {
+      user_id: 'private-space',
+      kind: 'bookshelf',
+      replica_id: 'recent',
+      fields_jsonb: { position: { v: 42, t: timestamp, s: 'remote' } },
+      manifest_jsonb: null,
+      deleted_at_ts: null,
+      reincarnation: null,
+      updated_at_ts: timestamp,
+      schema_version: 1,
+    };
+    const invalid = { ...row, replica_id: 'not-a-shelf' };
+    let finishApply: (() => void) | undefined;
+    applyBookshelvesSpy.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishApply = resolve;
+        }),
+    );
+    const manager = makeManagerMock();
+    manager.pullMany.mockResolvedValue(new Map([['bookshelf', [row, invalid]]]));
+    getReplicaSyncSpy.mockReturnValue({ manager });
+    renderHook(() => useReplicaPull({ kinds: ['bookshelf'], delayMs: 100 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(applyBookshelvesSpy).toHaveBeenCalled();
+    expect(acknowledgePullSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishApply?.();
+    });
+
+    expect(acknowledgePullSpy).toHaveBeenCalledOnce();
+    expect(acknowledgePullSpy.mock.calls[0]![0]).toBe(row);
+  });
+
+  test('does not acknowledge private bookshelf rows when persistence rejects', async () => {
+    privateMode = true;
+    const timestamp = '0000000000001-00000000-remote' as Hlc;
+    const row: ReplicaRow = {
+      user_id: 'private-space',
+      kind: 'bookshelf',
+      replica_id: 'recent',
+      fields_jsonb: { position: { v: 42, t: timestamp, s: 'remote' } },
+      manifest_jsonb: null,
+      deleted_at_ts: null,
+      reincarnation: null,
+      updated_at_ts: timestamp,
+      schema_version: 1,
+    };
+    applyBookshelvesSpy.mockRejectedValueOnce(new Error('Local persistence failed'));
+    const manager = makeManagerMock();
+    manager.pullMany.mockResolvedValue(new Map([['bookshelf', [row]]]));
+    getReplicaSyncSpy.mockReturnValue({ manager });
+    renderHook(() => useReplicaPull({ kinds: ['bookshelf'], delayMs: 100 }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    expect(applyBookshelvesSpy).toHaveBeenCalledWith(envValue.envConfig, [row]);
+    expect(acknowledgePullSpy).not.toHaveBeenCalled();
+  });
+
   test('applies fetched bookshelf rows even if the token disappears after the batch pull', async () => {
     const rows = [{ kind: 'bookshelf', replica_id: 'recent' }];
     const manager = makeManagerMock();

@@ -17,6 +17,7 @@ import { stubTranslation as _ } from '@/utils/misc';
 import { SIZE_PER_LOC, SIZE_PER_TIME_UNIT } from '@/services/constants';
 import { isFeedBook } from '@/services/rss/feedBookUrl';
 import { isAbsOfflineCapable, isAudiobook } from '@/utils/audiobook';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 
 /** Valid sort types for the library */
 const VALID_SORT_TYPES: LibrarySortByType[] = Object.values(LibrarySortByType);
@@ -1184,7 +1185,7 @@ export const getBookContextMenuItemIds = (
     if (!book.uploadedAt && book.downloadedAt) ids.push('upload');
     // Share is offered for any local-or-uploaded book; the dialog uploads first
     // if the book hasn't been pushed yet.
-    if (book.downloadedAt || book.uploadedAt) ids.push('share');
+    if (!isPrivateS3Mode() && (book.downloadedAt || book.uploadedAt)) ids.push('share');
     // LocalSend needs the file on this device; cloud-only books are excluded.
     if (opts?.localSend && (book.downloadedAt || book.filePath)) ids.push('sendNearby');
   }

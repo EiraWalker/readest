@@ -77,11 +77,11 @@ export function SyncPassphraseSection() {
 
   const handleForget = async () => {
     if (
-      !confirm(
+      !(await confirm(
         _(
           'This permanently deletes the encrypted credentials we sync (e.g., OPDS catalog passwords) on every device. Local copies are preserved. You will need to re-enter the sync passphrase or set a new one. Continue?',
         ),
-      )
+      ))
     ) {
       return;
     }

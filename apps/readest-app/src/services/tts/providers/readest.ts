@@ -1,5 +1,6 @@
 import type { TTSWordBoundary } from '@/libs/edgeTTS';
 import { getReadestVoiceAPIBaseUrl } from '@/services/environment';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { getAccessToken, getSubscriptionPlan, isVoiceTierInPlan } from '@/utils/access';
 import { fetchWithAuth } from '@/utils/fetch';
 import { readNDJSON } from '@/utils/ndjson';
@@ -168,6 +169,7 @@ export class ReadestVoiceProvider implements SpeechProvider {
 
   // BufferedTTSClient calls getAllVoices before init: both share one request.
   getAllVoices(): Promise<TTSVoice[]> {
+    if (isPrivateS3Mode()) return Promise.resolve([]);
     this.#voices ??= this.#fetchVoices();
     return this.#voices;
   }
@@ -175,6 +177,7 @@ export class ReadestVoiceProvider implements SpeechProvider {
   // Available to every reader, on any plan: a voice the plan lacks is listed
   // disabled and gated only when it is picked or played.
   async init(): Promise<boolean> {
+    if (isPrivateS3Mode()) return false;
     // A new session (or day) may have fresh quota.
     this.#quotaExhaustedAt = 0;
     this.#voices = null; // the next listing asks again (plan or catalog may change)
@@ -189,6 +192,7 @@ export class ReadestVoiceProvider implements SpeechProvider {
 
   // Boots a worker when the voice picker opens; once per provider.
   warmup(): void {
+    if (isPrivateS3Mode()) return;
     if (this.#warmupFired) return;
     this.#warmupFired = true;
     fetchWithAuth(`${getReadestVoiceAPIBaseUrl()}/tts/readest`, {
@@ -203,6 +207,9 @@ export class ReadestVoiceProvider implements SpeechProvider {
     signal: AbortSignal,
     options?: PrefetchOptions,
   ): Promise<SpeechSynthesisResult> {
+    if (isPrivateS3Mode()) {
+      return Promise.reject(new SpeechSynthesisFatalError('Official voice service is unavailable'));
+    }
     if (this.#quotaExhausted()) {
       this.#noticeQuota();
       return Promise.reject(new SpeechSynthesisFatalError(DAILY_QUOTA_EXCEEDED));
@@ -244,6 +251,7 @@ export class ReadestVoiceProvider implements SpeechProvider {
     signal: AbortSignal,
     options?: PrefetchOptions,
   ): void {
+    if (isPrivateS3Mode()) return;
     if (this.#quotaExhausted() || signal.aborted) return;
     const background = lane === 'listen' && !!options?.background;
     const onDelivered = options?.onDelivered;

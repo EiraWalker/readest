@@ -38,6 +38,7 @@ import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { isTauriAppPlatform } from '@/services/environment';
 import { tauriDownload, tauriUpload } from '@/utils/transfer';
 import type { ProgressHandler } from '@/utils/transfer';
+import { resolveS3Credentials, type S3Credentials } from './credentials';
 import {
   FileEntry,
   FileHead,
@@ -53,8 +54,9 @@ export interface S3ProviderConfig {
   /** SigV4 region; 'auto' works for R2/MinIO, AWS wants the bucket region. */
   region?: string;
   bucket: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  credentialRef?: string;
 }
 
 /** Injected `fetch`, typed to what the provider uses (string URL + init). */
@@ -193,7 +195,7 @@ class S3ProviderImpl {
   private readonly baseUrl: string;
 
   constructor(
-    config: S3ProviderConfig,
+    config: S3ProviderConfig & S3Credentials,
     private readonly fetchFn: S3FetchFn,
     private readonly sleep: S3SleepFn = defaultSleep,
   ) {
@@ -346,8 +348,9 @@ class S3ProviderImpl {
       const url = await this.presign(HTTP_PUT, remotePath);
       await tauriUpload(url, localPath, 'PUT');
       return true;
-    } catch (e) {
-      console.warn('S3Provider.uploadStream failed', remotePath, e);
+    } catch {
+      // Native network errors can include the presigned URL and signing key id.
+      console.warn('S3Provider.uploadStream failed', remotePath);
       return false;
     }
   }
@@ -362,8 +365,8 @@ class S3ProviderImpl {
       const url = await this.presign(HTTP_GET, remotePath);
       await tauriDownload(url, localPath, onProgress);
       return true;
-    } catch (e) {
-      console.warn('S3Provider.downloadStream failed', remotePath, e);
+    } catch {
+      console.warn('S3Provider.downloadStream failed', remotePath);
       return false;
     }
   }
@@ -439,23 +442,39 @@ export const createS3Provider = (
   fetchFn: S3FetchFn = resolveFetch(),
   options: S3ProviderOptions = {},
 ): FileSyncProvider => {
-  const impl = new S3ProviderImpl(config, fetchFn, options.sleep);
+  let pending: Promise<S3ProviderImpl> | undefined;
+  const implementation = (): Promise<S3ProviderImpl> => {
+    pending ??= resolveS3Credentials(config)
+      .then((resolved) => new S3ProviderImpl(resolved, fetchFn, options.sleep))
+      .catch((error: unknown) => {
+        pending = undefined;
+        throw error;
+      });
+    return pending;
+  };
   const provider: FileSyncProvider = {
-    rootPath: impl.rootPath,
-    readText: (path) => wrap(() => impl.readText(path)),
-    readBinary: (path) => wrap(() => impl.readBinary(path)),
-    head: (path) => wrap(() => impl.head(path)),
-    list: (path) => wrap(() => impl.list(path)),
-    writeText: (path, body, contentType) => wrap(() => impl.writeText(path, body, contentType)),
-    writeBinary: (path, body, contentType) => wrap(() => impl.writeBinary(path, body, contentType)),
-    ensureDir: (paths) => wrap(() => impl.ensureDir(paths)),
-    deleteDir: (path) => wrap(() => impl.deleteDir(path)),
+    rootPath: '/',
+    readText: (path) => wrap(async () => (await implementation()).readText(path)),
+    readBinary: (path) => wrap(async () => (await implementation()).readBinary(path)),
+    head: (path) => wrap(async () => (await implementation()).head(path)),
+    list: (path) => wrap(async () => (await implementation()).list(path)),
+    writeText: (path, body, contentType) =>
+      wrap(async () => (await implementation()).writeText(path, body, contentType)),
+    writeBinary: (path, body, contentType) =>
+      wrap(async () => (await implementation()).writeBinary(path, body, contentType)),
+    ensureDir: (paths) => wrap(async () => (await implementation()).ensureDir(paths)),
+    deleteDir: (path) => wrap(async () => (await implementation()).deleteDir(path)),
   };
 
   if (isTauriAppPlatform()) {
-    provider.uploadStream = (remotePath, localPath) => impl.uploadStream(remotePath, localPath);
-    provider.downloadStream = (remotePath, localPath, onProgress) =>
-      impl.downloadStream(remotePath, localPath, onProgress);
+    provider.uploadStream = async (remotePath, localPath) =>
+      implementation()
+        .then((impl) => impl.uploadStream(remotePath, localPath))
+        .catch(() => false);
+    provider.downloadStream = async (remotePath, localPath, onProgress) =>
+      implementation()
+        .then((impl) => impl.downloadStream(remotePath, localPath, onProgress))
+        .catch(() => false);
   }
 
   return provider;

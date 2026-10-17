@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
 
 import { Book } from '@/types/book';
@@ -72,7 +72,11 @@ vi.mock('next/image', () => ({
   },
 }));
 
-afterEach(() => cleanup());
+beforeEach(() => vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'false'));
+afterEach(() => {
+  cleanup();
+  vi.unstubAllEnvs();
+});
 
 const makeBook = (overrides?: Partial<Book>): Book =>
   ({
@@ -129,6 +133,18 @@ describe('BookDetailView delete dropdown layout', () => {
 });
 
 describe('BookDetailView More menu (Goodreads + Share)', () => {
+  it('hides official sharing in private mode while preserving local export', () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    const { container, queryByText } = renderView({
+      onShare: vi.fn(),
+      shareEnabled: true,
+      onExport: vi.fn(),
+    });
+    fireEvent.click(container.querySelector('button[aria-label="More Actions"]')!);
+    expect(queryByText('Share Book')).toBeNull();
+    expect(queryByText('Export Book')).toBeTruthy();
+  });
+
   const openMore = (container: HTMLElement) => {
     const toggle = container.querySelector('button[aria-label="More Actions"]');
     expect(toggle).toBeTruthy();

@@ -57,6 +57,68 @@ afterEach(() => {
 });
 
 describe('ReplicaSyncManager.markDirty + flush', () => {
+  test('reports a row pending throughout the push until its acknowledgement completes', async () => {
+    const { manager, client } = makeManager();
+    const row = { ...makeRow('catalog-1'), kind: 'opds_catalog' };
+    let completePush: (() => void) | undefined;
+    client.push.mockImplementationOnce(
+      (rows) =>
+        new Promise<ReplicaRow[]>((resolve) => {
+          completePush = () => resolve(rows);
+        }),
+    );
+    expect(manager.hasPendingRow(row.kind, row.replica_id)).toBe(false);
+    manager.markDirty(row);
+    expect(manager.hasPendingRow(row.kind, row.replica_id)).toBe(true);
+    expect(manager.hasPendingRow('settings', row.replica_id)).toBe(false);
+    expect(manager.hasPendingRow(row.kind, 'other-catalog')).toBe(false);
+
+    const flushing = manager.flush();
+    await Promise.resolve();
+    expect(client.push).toHaveBeenCalledOnce();
+    expect(manager.hasPendingRow(row.kind, row.replica_id)).toBe(true);
+
+    completePush?.();
+    await flushing;
+
+    expect(manager.hasPendingRow(row.kind, row.replica_id)).toBe(false);
+  });
+
+  test('keeps a concurrent edit pending after an older in-flight push completes', async () => {
+    const { manager, client } = makeManager();
+    let completePush: (() => void) | undefined;
+    client.push.mockImplementationOnce(
+      (rows) =>
+        new Promise<ReplicaRow[]>((resolve) => {
+          completePush = () => resolve(rows);
+        }),
+    );
+    manager.markDirty(makeRow('r1'));
+    const flushing = manager.flush();
+    await Promise.resolve();
+    manager.markDirty(makeRow('r1', hlcPack(NOW, 1, DEV)));
+
+    completePush?.();
+    await flushing;
+
+    expect(manager.hasPendingRow('dictionary', 'r1')).toBe(true);
+    await manager.flush();
+    expect(manager.hasPendingRow('dictionary', 'r1')).toBe(false);
+  });
+
+  test('keeps failed rows pending and recognizes account-scoped bookshelf keys', async () => {
+    const { manager, client } = makeManager();
+    manager.markDirty({ ...makeRow('recent'), kind: 'bookshelf' });
+    client.push.mockRejectedValueOnce(new Error('offline'));
+
+    await expect(manager.flush()).rejects.toThrow('offline');
+
+    expect(manager.hasPendingRow('bookshelf', 'recent')).toBe(true);
+    expect(manager.hasPendingRow('dictionary', 'recent')).toBe(false);
+    await manager.flush();
+    expect(manager.hasPendingRow('bookshelf', 'recent')).toBe(false);
+  });
+
   test('uploads large queues in batches of at most 100', async () => {
     const { manager, client } = makeManager();
     for (let i = 0; i < 250; i++) manager.markDirty(makeRow(`r${i}`));

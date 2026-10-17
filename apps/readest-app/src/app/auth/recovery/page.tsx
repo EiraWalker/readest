@@ -8,8 +8,14 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { ThemeSupa } from '@supabase/auth-ui-shared';
 import { Auth } from '@supabase/auth-ui-react';
 import { supabase } from '@/utils/supabase';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
+import { PrivateSyncPage } from '@/app/user/components/PrivateSyncPage';
 
 export default function ResetPasswordPage() {
+  return isPrivateS3Mode() ? <PrivateSyncPage /> : <OfficialResetPasswordPage />;
+}
+
+function OfficialResetPasswordPage() {
   const _ = useTranslation();
   const router = useRouter();
   const { login } = useAuth();

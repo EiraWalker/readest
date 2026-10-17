@@ -28,6 +28,7 @@ import { ReadestVoiceProvider } from './providers/readest';
 import { OpenAICompatibleSpeechProvider } from './providers/openaiCompatible';
 import type { CustomTTSService } from '@/types/customTTS';
 import { getAccessToken, isCustomTTSAllowed } from '@/utils/access';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { SectionTimeline, TimelineSentence } from './SectionTimeline';
 import { estimateSentenceSeconds, hydrateProvisionalDurations } from './ttsDuration';
 import { DownloadableSentence, SectionEnumerator, TTSDownloader } from './TTSDownloader';
@@ -508,7 +509,9 @@ export class TTSController extends EventTarget {
     // Started together: each can take seconds (Edge synthesizes a probe
     // sentence, system TTS waits for its voices), and play waits on them all.
     // Results are still taken in priority order.
-    const readestReady = withinEngineTimeout(this.ttsReadestClient.init(), false);
+    const readestReady = isPrivateS3Mode()
+      ? Promise.resolve(false)
+      : withinEngineTimeout(this.ttsReadestClient.init(), false);
     const customReady = withinEngineTimeout(this.ttsCustomClient.init(), false);
     const edgeReady = withinEngineTimeout(this.ttsEdgeClient.init(), false);
     const nativeReady = this.ttsNativeClient
@@ -2257,7 +2260,7 @@ export class TTSController extends EventTarget {
     // Listed for every reader, the voices their plan lacks greyed out; hidden
     // only when there is no catalog (kill switch, offline).
     const ttsReadestVoices =
-      (await this.ttsReadestClient.getAllVoices()).length > 0
+      !isPrivateS3Mode() && (await this.ttsReadestClient.getAllVoices()).length > 0
         ? (await this.ttsReadestClient.getVoices(lang)).filter((group) => group.voices.length > 0)
         : [];
     // The picker is open: boot a GPU worker so the first window is warm, but
@@ -2318,6 +2321,7 @@ export class TTSController extends EventTarget {
       this.ttsCustomClient.initialized &&
       this.ttsCustomVoices.some((voice) => voice.id === voiceId);
     const useReadestTTS =
+      !isPrivateS3Mode() &&
       voiceId !== '' &&
       this.ttsReadestClient.initialized &&
       this.ttsReadestVoices.some((voice) => voice.id === voiceId && !voice.disabled);

@@ -3,6 +3,20 @@ import { getAPIBaseUrl } from '@/services/environment';
 import { SyncError } from '@/libs/errors';
 import type { Hlc, ReplicaRow } from '@/types/replica';
 import type { SyncErrorCode } from '@/libs/errors';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
+import { isCredentialsSyncEnabled } from '@/services/sync/syncCategories';
+import type { S3ReplicaClient } from '@/services/sync/s3ReplicaClient';
+
+const privateCredentialPolicies = new WeakMap<S3ReplicaClient, boolean>();
+const privateClient = async () => {
+  const client = (await (await import('@/services/sync/privateS3Runtime')).getPrivateS3Runtime())
+    .replicaClient;
+  const credentials = isCredentialsSyncEnabled();
+  const previous = privateCredentialPolicies.get(client);
+  if (previous !== undefined && previous !== credentials) client.clearPullAcknowledgements();
+  privateCredentialPolicies.set(client, credentials);
+  return client;
+};
 
 const ENDPOINT = () => `${getAPIBaseUrl()}/sync/replicas`;
 const KEYS_ENDPOINT = () => `${getAPIBaseUrl()}/sync/replica-keys`;
@@ -46,6 +60,7 @@ const requireToken = async (): Promise<string> => {
 
 export class ReplicaSyncClient {
   async push(rows: ReplicaRow[]): Promise<ReplicaRow[]> {
+    if (isPrivateS3Mode()) return (await privateClient()).push(rows);
     if (rows.length === 0) return [];
     const token = await requireToken();
     let response: Response;
@@ -73,6 +88,7 @@ export class ReplicaSyncClient {
   }
 
   async pull(kind: string, since: Hlc | null): Promise<ReplicaRow[]> {
+    if (isPrivateS3Mode()) return (await privateClient()).pull(kind, since);
     const token = await requireToken();
     const params = new URLSearchParams({ kind });
     if (since) params.set('since', since);
@@ -112,6 +128,7 @@ export class ReplicaSyncClient {
   async pullBatch(
     cursors: { kind: string; since: Hlc | null }[],
   ): Promise<{ kind: string; rows: ReplicaRow[] }[]> {
+    if (isPrivateS3Mode()) return (await privateClient()).pullBatch(cursors);
     if (cursors.length === 0) return [];
     const token = await requireToken();
     let response: Response;
@@ -189,6 +206,7 @@ export class ReplicaSyncClient {
   }
 
   async listReplicaKeys(): Promise<ReplicaKeyRow[]> {
+    if (isPrivateS3Mode()) return (await privateClient()).listReplicaKeys();
     if (this.replicaKeysCache !== null) {
       // Defensive copy — callers occasionally mutate the returned array
       // (e.g., `[...rows].sort(...)`). Returning the cache directly
@@ -212,6 +230,7 @@ export class ReplicaSyncClient {
   }
 
   async forgetReplicaKeys(): Promise<void> {
+    if (isPrivateS3Mode()) return (await privateClient()).forgetReplicaKeys();
     const token = await requireToken();
     let response: Response;
     try {
@@ -237,6 +256,7 @@ export class ReplicaSyncClient {
   }
 
   async createReplicaKey(alg: string): Promise<ReplicaKeyRow> {
+    if (isPrivateS3Mode()) return (await privateClient()).createReplicaKey(alg);
     const token = await requireToken();
     let response: Response;
     try {
@@ -277,3 +297,25 @@ export class ReplicaSyncClient {
 }
 
 export const replicaSyncClient = new ReplicaSyncClient();
+
+/** Confirm local application without treating a successful fetch as an apply. */
+export const acknowledgeReplicaPull = async (row: ReplicaRow): Promise<void> => {
+  if (isPrivateS3Mode()) (await privateClient()).acknowledgePull(row);
+};
+
+/** Recheck after asynchronous reads/decryption before replacing local state. */
+export const canApplyReplicaPull = async (row: ReplicaRow): Promise<boolean> => {
+  if (!isPrivateS3Mode()) return true;
+  const client = await privateClient();
+  const [{ hasPendingReplicaPublication }, { getReplicaSync }] = await Promise.all([
+    import('@/services/sync/replicaPublish'),
+    import('@/services/sync/replicaSync'),
+  ]);
+  const manager = getReplicaSync()?.manager;
+  return (
+    !!manager &&
+    !hasPendingReplicaPublication(row.kind, row.replica_id) &&
+    !manager.hasPendingRow(row.kind, row.replica_id) &&
+    client.canApplyPull(row)
+  );
+};

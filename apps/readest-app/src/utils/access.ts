@@ -9,6 +9,7 @@ import {
 import { isWebAppPlatform } from '@/services/environment';
 import { getDailyUsage } from '@/services/translators/utils';
 import { getRuntimeConfig } from '@/services/runtimeConfig';
+import { getPrivateS3Identity, isPrivateS3Mode } from '@/services/sync/privateS3';
 
 interface Token {
   plan: UserPlan;
@@ -175,6 +176,7 @@ export const PREMIUM_PLANS: readonly UserPlan[] = ['plus', 'pro'];
  * window-injected config does not exist.
  */
 export const isSelfHosted = (): boolean =>
+  isPrivateS3Mode() ||
   getRuntimeConfig()?.selfHosted === true ||
   // `??` would stop at an empty string, so an explicitly blank SELF_HOSTED
   // would mask NEXT_PUBLIC_SELF_HOSTED. `||` falls through on empty too.
@@ -278,6 +280,7 @@ export const getDailyTranslationPlanData = (token: string) => {
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
+  if (isPrivateS3Mode()) return null;
   // In browser context there might be two instances of supabase one in the app route
   // and the other in the pages route, and they might have different sessions
   // making the access token invalid for API calls. In that case we should use localStorage.
@@ -289,6 +292,10 @@ export const getAccessToken = async (): Promise<string | null> => {
 };
 
 export const getUserID = async (): Promise<string | null> => {
+  if (isPrivateS3Mode()) {
+    const { useSettingsStore } = await import('@/store/settingsStore');
+    return getPrivateS3Identity(useSettingsStore.getState().settings);
+  }
   if (isWebAppPlatform()) {
     const user = localStorage.getItem('user') ?? '{}';
     return JSON.parse(user).id ?? null;

@@ -46,6 +46,7 @@ import { upgradeToKeychainIfAvailable } from '@/libs/crypto/passphrase';
 import { cryptoSession } from '@/libs/crypto/session';
 import { useAppLockStore } from '@/store/appLockStore';
 import { initSettingsSync } from '@/services/sync/replicaSettingsSync';
+import { getPrivateS3Identity, isPrivateS3Mode } from '@/services/sync/privateS3';
 
 // One-time, on first launch after this feature ships, decide how to handle
 // PostHog telemetry for the current install:
@@ -114,7 +115,12 @@ const finalizeTelemetryDecision = ({
 
 const Providers = ({ children }: { children: React.ReactNode }) => {
   const { envConfig, appService } = useEnv();
-  const { applyUILanguage } = useSettingsStore();
+  const { settings, applyUILanguage } = useSettingsStore();
+  const passphraseRestoreIdentity = isPrivateS3Mode()
+    ? settings.version
+      ? getPrivateS3Identity(settings)
+      : null
+    : 'official';
   const { applyBackgroundTexture } = useBackgroundTexture();
   const { applyEinkMode } = useEinkMode();
   const {
@@ -233,13 +239,15 @@ const Providers = ({ children }: { children: React.ReactNode }) => {
   // ephemeral to OS keychain on Tauri (probe is async — must run after
   // the platform check resolves), then attempt a silent unlock from
   // the saved passphrase. Failures are silent — the gate prompts on
-  // first encrypted-field operation if we couldn't restore.
+  // first encrypted-field operation if we couldn't restore. Private keys are
+  // scoped by S3 identity, so disk hydration/connection must finish first.
   useEffect(() => {
+    if (!passphraseRestoreIdentity) return;
     void (async () => {
       await upgradeToKeychainIfAvailable();
       await cryptoSession.tryRestoreFromStore();
     })();
-  }, []);
+  }, [passphraseRestoreIdentity]);
 
   useEffect(() => {
     const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');

@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import { getBookProgress, useBookProgress } from '@/store/readerProgressStore';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useEnv } from '@/context/EnvContext';
-import { useAuth } from '@/context/AuthContext';
+import { useSyncIdentity } from '@/hooks/useSyncIdentity';
 import { StatisticsDb } from '@/services/statistics/statisticsDb';
 import { TrackerCore, type FlushedEvent } from '@/services/statistics/trackerCore';
 import { getBookHashFromKey, ttsSessionManager } from '@/services/tts/TTSSessionManager';
@@ -14,6 +14,7 @@ import { BookOrbitClient } from '@/services/bookorbit/BookOrbitClient';
 import { pushStatsToBookOrbit } from '@/services/bookorbit/statsPush';
 import { pushStats, pullStats } from '@/services/statistics/statsSync';
 import { isSyncCategoryEnabled } from '@/services/sync/syncCategories';
+import { getPrivateS3StatsClient } from '@/services/sync/privateS3Runtime';
 import { useSettingsStore } from '@/store/settingsStore';
 import { eventDispatcher } from '@/utils/event';
 
@@ -32,7 +33,7 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
   const progress = useBookProgress(bookKey);
   // booksData is keyed by book id = bookKey.split('-')[0].
   const getBookData = useBookDataStore((s) => s.getBookData);
-  const { user } = useAuth();
+  const syncIdentity = useSyncIdentity();
   const coreRef = useRef(new TrackerCore(DEFAULT_STATS_TRACKING_CONFIG));
   const dbRef = useRef<StatisticsDb | null>(null);
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -55,7 +56,7 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
   // Book.author is the single-string author field; upsertBook takes authors: string.
   const authors = book?.author ?? '';
 
-  const syncEnabled = () => !!user && isSyncCategoryEnabled('stats');
+  const syncEnabled = () => !!syncIdentity && isSyncCategoryEnabled('stats');
 
   // BookOrbit stats push needs no Readest account — only the integration.
   const bookOrbitStatsPush = (db: StatisticsDb): Promise<unknown> | undefined => {
@@ -74,7 +75,11 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
   };
 
   const pushToAllTargets = (db: StatisticsDb) => {
-    if (syncEnabled()) runBestEffort(pushStats(db, new SyncClient()));
+    if (syncEnabled()) {
+      runBestEffort(
+        getPrivateS3StatsClient().then((client) => pushStats(db, client ?? new SyncClient())),
+      );
+    }
     const bookOrbitPush = bookOrbitStatsPush(db);
     if (bookOrbitPush) runBestEffort(bookOrbitPush);
   };
@@ -91,17 +96,20 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
     if (!appService) return;
     let cancelled = false;
     runBestEffort(
-      StatisticsDb.open(appService).then((db) => {
+      StatisticsDb.open(appService).then(async (db) => {
         if (cancelled) return;
         dbRef.current = db;
-        if (syncEnabled()) runBestEffort(pullStats(db, new SyncClient()));
+        if (syncEnabled()) {
+          const client = await getPrivateS3StatsClient();
+          if (!cancelled) runBestEffort(pullStats(db, client ?? new SyncClient()));
+        }
       }),
     );
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appService]);
+  }, [appService, syncIdentity]);
 
   // Persist flushed events into the statistics DB.
   const persist = async (events: FlushedEvent[]): Promise<void> => {

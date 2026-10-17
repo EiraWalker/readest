@@ -25,11 +25,15 @@ import {
   applyRemoteSettings,
   initSettingsSync,
   publishSettingsIfChanged,
+  completePrivateSettingsPull,
 } from '@/services/sync/replicaSettingsSync';
 import { useSettingsStore } from '@/store/settingsStore';
+import { DEFAULT_SYSTEM_SETTINGS } from '@/services/constants';
 import type { SystemSettings } from '@/types/settings';
 import type { EnvConfigType } from '@/services/environment';
 import type { CustomTheme } from '@/styles/themes';
+import { hlcPack } from '@/libs/crdt';
+import type { ReplicaRow } from '@/types/replica';
 
 const baseHighlight = {
   customThemes: [],
@@ -57,6 +61,118 @@ const makeSettings = (overrides: Partial<SystemSettings> = {}): SystemSettings =
   }) as unknown as SystemSettings;
 
 const makeEnvConfig = (): EnvConfigType => ({ getAppService: vi.fn() }) as unknown as EnvConfigType;
+
+test('publishes preferences edited before private S3 was first configured', async () => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  const initial = { ...DEFAULT_SYSTEM_SETTINGS } as SystemSettings;
+  initSettingsSync(initial);
+  const edited = {
+    ...initial,
+    globalViewSettings: { ...initial.globalViewSettings, userStylesheet: 'body { color: red; }' },
+  };
+  await publishSettingsIfChanged(edited);
+  expect(publishMock).not.toHaveBeenCalled();
+  const connected = {
+    ...edited,
+    s3: { enabled: true, endpoint: 'https://s3.cn-north-1.qiniucs.com', bucket: 'private-library' },
+  } as SystemSettings;
+  useSettingsStore.setState({ settings: connected });
+  await publishSettingsIfChanged(connected);
+  await completePrivateSettingsPull([]);
+  expect(publishMock).toHaveBeenCalledWith(
+    'settings',
+    expect.objectContaining({
+      patch: expect.objectContaining({
+        globalViewSettings: expect.objectContaining({ userStylesheet: 'body { color: red; }' }),
+      }),
+    }),
+    expect.any(String),
+  );
+});
+
+describe('private settings first connection', () => {
+  const connectedSettings = (): SystemSettings =>
+    ({
+      ...DEFAULT_SYSTEM_SETTINGS,
+      globalViewSettings: {
+        ...DEFAULT_SYSTEM_SETTINGS.globalViewSettings,
+        userStylesheet: 'body { color: red; }',
+      },
+      s3: {
+        ...DEFAULT_SYSTEM_SETTINGS.s3,
+        enabled: true,
+        endpoint: 'https://s3.cn-north-1.qiniucs.com',
+        bucket: 'private-library',
+      },
+    }) as SystemSettings;
+
+  test('uploads locally saved preferences after restarting before the first empty-space connection', async () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    // These preferences came from disk at restart, not a live edit since init.
+    const connected = connectedSettings();
+    initSettingsSync({ ...connected, s3: { ...connected.s3, enabled: false } });
+    useSettingsStore.setState({ settings: connected });
+    await publishSettingsIfChanged(connected);
+    expect(publishMock).not.toHaveBeenCalled();
+    await completePrivateSettingsPull([]);
+    expect(publishMock).toHaveBeenCalledWith(
+      'settings',
+      expect.objectContaining({
+        patch: expect.objectContaining({
+          globalViewSettings: expect.objectContaining({ userStylesheet: 'body { color: red; }' }),
+        }),
+      }),
+      expect.any(String),
+    );
+  });
+
+  test('keeps existing remote preferences authoritative instead of seeding device B defaults', async () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    const local = connectedSettings();
+    initSettingsSync(local);
+    useSettingsStore.setState({ settings: local });
+    const t = hlcPack(1_700_000_000_000, 0, 'other-device');
+    const remote: ReplicaRow = {
+      user_id: 'space',
+      kind: 'settings',
+      replica_id: 'singleton',
+      fields_jsonb: {
+        'globalViewSettings.userStylesheet': { v: 'body { color: blue; }', t, s: 'other-device' },
+      },
+      manifest_jsonb: null,
+      deleted_at_ts: null,
+      reincarnation: null,
+      updated_at_ts: t,
+      schema_version: 1,
+    };
+    applyRemoteSettings(makeEnvConfig(), {
+      name: 'singleton',
+      patch: {
+        globalViewSettings: { userStylesheet: 'body { color: blue; }' },
+      } as Partial<SystemSettings>,
+    });
+    await completePrivateSettingsPull([remote]);
+    await publishSettingsIfChanged(useSettingsStore.getState().settings);
+    expect(useSettingsStore.getState().settings.globalViewSettings.userStylesheet).toBe(
+      'body { color: blue; }',
+    );
+    expect(publishMock).not.toHaveBeenCalledWith(
+      'settings',
+      expect.objectContaining({
+        patch: expect.objectContaining({ globalViewSettings: expect.anything() }),
+      }),
+      expect.any(String),
+    );
+  });
+
+  test('does not change standard-build publish behavior after an empty pull', async () => {
+    const local = connectedSettings();
+    initSettingsSync(local);
+    useSettingsStore.setState({ settings: local });
+    await completePrivateSettingsPull([]);
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+});
 
 /**
  * Opt the current test into credential sync. Most tests in this file
@@ -105,6 +221,7 @@ beforeEach(() => {
 
 afterEach(() => {
   __resetSettingsSyncForTests();
+  vi.unstubAllEnvs();
 });
 
 describe('publishSettingsIfChanged', () => {
@@ -526,7 +643,7 @@ describe('publishSettingsIfChanged', () => {
       expect(patch.s3?.secretAccessKey).toBeUndefined();
     });
 
-    test('publishes S3 credentials when credentials sync is ON', async () => {
+    test('keeps S3 credentials local even when other credential sync is ON', async () => {
       await setCredentials(true);
       isUnlocked = true;
       await publishSettingsIfChanged(
@@ -543,8 +660,8 @@ describe('publishSettingsIfChanged', () => {
       expect(publishMock).toHaveBeenCalledTimes(1);
       const patch = publishMock.mock.calls[0]![1].patch as Partial<SystemSettings>;
       expect(patch.s3?.endpoint).toBe('https://acc.r2.cloudflarestorage.com');
-      expect(patch.s3?.accessKeyId).toBe('AKIA');
-      expect(patch.s3?.secretAccessKey).toBe('shh');
+      expect(patch.s3?.accessKeyId).toBeUndefined();
+      expect(patch.s3?.secretAccessKey).toBeUndefined();
     });
 
     test('skipping all of the only-credential changes is a clean no-op (no empty publish)', async () => {
@@ -863,7 +980,7 @@ describe('applyRemoteSettings', () => {
     expect(merged.includeChapterHeading).toBe(false);
   });
 
-  test('deep-merges S3 credentials without clobbering local per-device fields', () => {
+  test('accepts public S3 coordinates while keeping local credentials and per-device fields', () => {
     const env = makeEnvConfig();
     useSettingsStore.setState({
       ...useSettingsStore.getState(),
@@ -898,8 +1015,8 @@ describe('applyRemoteSettings', () => {
     // Synced connection fields are applied.
     expect(merged.endpoint).toBe('https://acc.r2.cloudflarestorage.com');
     expect(merged.bucket).toBe('readest');
-    expect(merged.accessKeyId).toBe('AKIA');
-    expect(merged.secretAccessKey).toBe('shh');
+    expect(merged.accessKeyId).toBe('OLD');
+    expect(merged.secretAccessKey).toBe('old-secret');
     // Per-device fields the remote patch omits must survive the merge.
     expect(merged.enabled).toBe(true);
     expect(merged.deviceId).toBe('this-device');

@@ -7,6 +7,9 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { eventDispatcher } from '@/utils/event';
 import { FileSyncError } from '@/services/sync/file/provider';
 import { createS3Provider } from '@/services/sync/providers/s3/S3Provider';
+import { clearS3Credentials, saveS3Credentials } from '@/services/sync/providers/s3/credentials';
+import { getPrivateS3Identity, isPrivateS3Mode } from '@/services/sync/privateS3';
+import { isTauriAppPlatform } from '@/services/environment';
 import { SectionTitle } from '../primitives';
 import FileSyncForm from './FileSyncForm';
 import { persistCloudProviderEnabled } from './cloudSync';
@@ -51,6 +54,7 @@ const S3Form: React.FC = () => {
 
   const stored = settings.s3;
   const isActive = !!stored?.enabled;
+  const useSecureStorage = isPrivateS3Mode() || isTauriAppPlatform();
 
   const [endpoint, setEndpoint] = useState(stored?.endpoint || '');
   const [region, setRegion] = useState(stored?.region || 'auto');
@@ -60,7 +64,12 @@ const S3Form: React.FC = () => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
 
-  const canSubmit = !!(endpoint && bucket && accessKeyId && secretAccessKey);
+  const hasDraftKeys = !!(accessKeyId && secretAccessKey);
+  const canSubmit = !!(
+    endpoint &&
+    bucket &&
+    (hasDraftKeys || (useSecureStorage && stored?.credentialRef))
+  );
 
   const handleConnect = async () => {
     if (!canSubmit) return;
@@ -69,30 +78,87 @@ const S3Form: React.FC = () => {
       endpoint: endpoint.trim(),
       region: region.trim() || 'auto',
       bucket: bucket.trim(),
-      accessKeyId: accessKeyId.trim(),
-      secretAccessKey: secretAccessKey.trim(),
+      ...(hasDraftKeys
+        ? { accessKeyId: accessKeyId.trim(), secretAccessKey: secretAccessKey.trim() }
+        : { credentialRef: stored?.credentialRef }),
     };
+    let newCredentialRef: string | undefined;
+    const previous = useSettingsStore.getState().settings;
+    if (isPrivateS3Mode()) {
+      const nextSpace = getPrivateS3Identity({
+        ...previous,
+        s3: { ...previous.s3, ...draft, enabled: true },
+      });
+      const previousSpace = getPrivateS3Identity({
+        ...previous,
+        s3: { ...previous.s3, enabled: true },
+      });
+      if (
+        !nextSpace ||
+        (previous.s3.endpoint && previous.s3.bucket && previousSpace !== nextSpace)
+      ) {
+        eventDispatcher.dispatch('toast', {
+          type: 'error',
+          message: !nextSpace
+            ? _('An HTTPS S3 endpoint and bucket are required.')
+            : _('Use a separate library to connect a different S3 space.'),
+        });
+        setIsConnecting(false);
+        return;
+      }
+    }
     try {
       // One signed listing under the sync namespace validates endpoint,
       // bucket, and keys in a single round-trip (empty result included).
       await createS3Provider(draft).list('/Readest');
+      newCredentialRef =
+        useSecureStorage && hasDraftKeys
+          ? await saveS3Credentials({
+              accessKeyId: accessKeyId.trim(),
+              secretAccessKey: secretAccessKey.trim(),
+            })
+          : undefined;
+      const credentialRef = newCredentialRef ?? stored?.credentialRef;
+      await persistCloudProviderEnabled(envConfig, 's3', true, (s) => {
+        const next = {
+          ...s,
+          s3: {
+            ...s.s3,
+            endpoint: draft.endpoint,
+            region: draft.region,
+            bucket: draft.bucket,
+            credentialRef,
+          },
+        };
+        if (useSecureStorage) {
+          delete next.s3.accessKeyId;
+          delete next.s3.secretAccessKey;
+        } else {
+          next.s3.accessKeyId = accessKeyId.trim();
+          next.s3.secretAccessKey = secretAccessKey.trim();
+          delete next.s3.credentialRef;
+        }
+        return next;
+      });
+      if (useSecureStorage) {
+        setAccessKeyId('');
+        setSecretAccessKey('');
+      }
+      if (isPrivateS3Mode()) window.dispatchEvent(new Event('private-s3-configured'));
+      if (newCredentialRef && stored?.credentialRef) {
+        void clearS3Credentials(stored.credentialRef).catch(() => {});
+      }
+      eventDispatcher.dispatch('toast', { type: 'info', message: _('Connected') });
     } catch (e) {
+      setSettings({ ...useSettingsStore.getState().settings, s3: previous.s3 });
+      if (newCredentialRef) void clearS3Credentials(newCredentialRef).catch(() => {});
       eventDispatcher.dispatch('toast', {
         type: 'error',
         message: `${_('Failed to connect')}: ${formatConnectError(_, e)}`,
       });
+    } finally {
       setIsConnecting(false);
-      return;
     }
-    // Merge the connection into the s3 slice (preserving deviceId and
-    // sub-toggles), then switch S3 on. persistCloudProviderEnabled owns
-    // activation, persistence, and the cross-window provider broadcast.
-    await persistCloudProviderEnabled(envConfig, 's3', true, (s) => ({
-      ...s,
-      s3: { ...s.s3, ...draft },
-    }));
-    setIsConnecting(false);
-    eventDispatcher.dispatch('toast', { type: 'info', message: _('Connected') });
   };
 
   const handleDisconnect = async () => {

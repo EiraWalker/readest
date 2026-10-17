@@ -10,7 +10,7 @@ import {
 
 import { Book } from '@/types/book';
 import { useEnv } from '@/context/EnvContext';
-import { useAuth } from '@/context/AuthContext';
+import { useSyncIdentity } from '@/hooks/useSyncIdentity';
 import { useRouter } from 'next/navigation';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -18,6 +18,7 @@ import { useResponsiveSize } from '@/hooks/useResponsiveSize';
 import { LibraryCoverFitType, LibraryViewModeType } from '@/types/settings';
 import { navigateToLogin } from '@/utils/nav';
 import { isReadestCloudStorageActive } from '@/services/sync/cloudSyncProvider';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { isFeedBook } from '@/services/rss/feedBookUrl';
 import { isAudiobook } from '@/utils/audiobook';
 import { formatAuthors, formatDescription, formatSeries } from '@/utils/book';
@@ -59,7 +60,7 @@ const BookItem: React.FC<BookItemProps> = ({
 }) => {
   const _ = useTranslation();
   const router = useRouter();
-  const { user } = useAuth();
+  const syncIdentity = useSyncIdentity();
   const { appService } = useEnv();
   const { settings } = useSettingsStore();
   const showSpine = skeuomorphicCovers ?? settings.librarySkeuomorphicCovers;
@@ -326,8 +327,9 @@ const BookItem: React.FC<BookItemProps> = ({
                     className='show-cloud-button -m-2 p-2'
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => {
-                      if (!user) {
-                        navigateToLogin(router);
+                      if (!syncIdentity) {
+                        if (isPrivateS3Mode()) router.push('/user?section=sync');
+                        else navigateToLogin(router);
                         return;
                       }
                       if (!book.uploadedAt) {

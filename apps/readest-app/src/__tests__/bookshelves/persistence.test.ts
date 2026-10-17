@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getPrivateS3Identity } from '@/services/sync/privateS3';
 import { HlcGenerator } from '@/libs/crdt';
 import { useSettingsStore } from '@/store/settingsStore';
 import type { EnvConfigType } from '@/services/environment';
@@ -30,6 +31,7 @@ vi.mock('@/services/sync/replicaSync', () => ({
   getReplicaSync: () => (mocks.connected ? { hlc, manager: { markDirty: mocks.markDirty } } : null),
 }));
 const env = {} as EnvConfigType;
+afterEach(() => vi.unstubAllEnvs());
 beforeEach(() => {
   localStorage.clear();
   mocks.userId = 'account';
@@ -46,6 +48,26 @@ beforeEach(() => {
   });
 });
 describe('bookshelf persistence and sync integration', () => {
+  it('journals private space edits without an official cached account', async () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    localStorage.removeItem('user');
+    const settings = {
+      ...useSettingsStore.getState().settings,
+      s3: { enabled: true, endpoint: 'https://s3.cn-north-1.qiniucs.com', bucket: 'new-library' },
+    };
+    useSettingsStore.setState({ settings });
+    mocks.connected = true;
+    const base = readBookshelves(settings);
+    const shelf = createBookshelf('Private shelf');
+    await saveBookshelfDraft(env, base, [...base, shelf]);
+    expect(readPendingBookshelves()).toContainEqual(
+      expect.objectContaining({
+        user_id: getPrivateS3Identity(settings),
+        replica_id: shelf.id,
+      }),
+    );
+    expect(mocks.markDirty).toHaveBeenCalled();
+  });
   it.each([
     false,
     true,

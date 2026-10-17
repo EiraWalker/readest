@@ -29,6 +29,7 @@ import {
 import { DEFAULT_AI_SETTINGS } from './ai/constants';
 import { getTargetLang, isCJKEnv } from '@/utils/misc';
 import { safeLoadJSON, safeSaveJSON } from './persistence';
+import { getPrivateS3Identity, isPrivateS3Mode } from './sync/privateS3';
 
 export interface Context {
   fs: FileSystem;
@@ -178,8 +179,9 @@ export async function loadSettings(ctx: Context): Promise<SystemSettings> {
   // Recover this account's durable edits offline without refreshing its token.
   // Other accounts' edits stay in the journal until their owner signs in.
   const user = JSON.parse(localStorage.getItem('user') || '{}') as { id?: string };
+  const journalUserId = isPrivateS3Mode() ? getPrivateS3Identity(settings) : user.id;
   for (const row of readPendingBookshelves()) {
-    if (row.user_id && row.user_id !== user.id) continue;
+    if (row.user_id && row.user_id !== journalUserId) continue;
     settings.bookshelves = mergeBookshelfStates(settings.bookshelves, {
       rows: { [row.replica_id]: row },
     });
@@ -230,7 +232,15 @@ export async function saveSettings(fs: FileSystem, settings: SystemSettings): Pr
       next.bookshelves || disk.bookshelves
         ? { ...next, bookshelves: mergeBookshelfStates(disk.bookshelves, next.bookshelves) }
         : next;
-    await safeSaveJSON(fs, SETTINGS_FILENAME, 'Settings', merged);
+    // The isolated private build never stores keys in either settings copy.
+    // Standard builds retain their existing local credential persistence.
+    let persisted = merged;
+    if (isPrivateS3Mode()) {
+      persisted = { ...merged, s3: { ...merged.s3 } };
+      delete persisted.s3.accessKeyId;
+      delete persisted.s3.secretAccessKey;
+    }
+    await safeSaveJSON(fs, SETTINGS_FILENAME, 'Settings', persisted);
     if (pendingSettings === next) pendingSettings = null;
   };
   settingsWrites = settingsWrites.catch(() => {}).then(write);

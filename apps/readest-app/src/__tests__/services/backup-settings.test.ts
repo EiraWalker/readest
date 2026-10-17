@@ -1,5 +1,5 @@
 import { journalBookshelfOperation } from '@/services/bookshelves/journal';
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   BACKUP_SETTINGS_BLACKLIST,
   BACKUP_SETTINGS_CREDENTIAL_FIELDS,
@@ -21,6 +21,7 @@ import { SystemSettings } from '@/types/settings';
 
 /** Read an arbitrary (possibly stripped) field as a plain record. */
 const rec = (value: unknown): Record<string, unknown> => value as Record<string, unknown>;
+afterEach(() => vi.unstubAllEnvs());
 
 function makeSettings(overrides: Partial<SystemSettings> = {}): SystemSettings {
   return {
@@ -244,6 +245,22 @@ describe('sanitizeSettingsForBackup - blacklist', () => {
 });
 
 describe('sanitizeSettingsForBackup - credentials', () => {
+  it('never exports S3 access keys even when other credentials are included', () => {
+    const settings = makeSettings({
+      s3: {
+        enabled: true,
+        endpoint: 'https://s3.example.com',
+        bucket: 'readest',
+        accessKeyId: 'local-only-access',
+        secretAccessKey: 'local-only-secret',
+      },
+    });
+    const out = sanitizeSettingsForBackup(settings, { includeCredentials: true });
+    expect(out.s3.accessKeyId).toBeUndefined();
+    expect(out.s3.secretAccessKey).toBeUndefined();
+    expect(out.s3.bucket).toBe('readest');
+  });
+
   it('strips credentials by default', () => {
     const out = sanitizeSettingsForBackup(makeSettings());
     expect(rec(out.kosync)['username']).toBeUndefined();
@@ -297,6 +314,37 @@ describe('sanitizeSettingsForBackup - credentials', () => {
 });
 
 describe('mergeRestoredSettings', () => {
+  it('keeps a bound private S3 space and native credential reference when restoring settings', () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    const current = makeSettings({
+      s3: {
+        enabled: false,
+        endpoint: 'https://s3.original.example.com',
+        region: 'north',
+        bucket: 'original-library',
+        credentialRef: 'local-reference',
+      },
+    });
+    const backup = makeSettings({
+      s3: {
+        enabled: true,
+        endpoint: 'https://s3.other.example.com',
+        region: 'south',
+        bucket: 'different-library',
+        credentialRef: 'foreign-reference',
+        accessKeyId: 'FOREIGN_ACCESS',
+        secretAccessKey: 'FOREIGN_SECRET',
+      },
+    });
+    const restored = mergeRestoredSettings(current, backup);
+    expect(restored.s3.endpoint).toBe(current.s3.endpoint);
+    expect(restored.s3.region).toBe('north');
+    expect(restored.s3.bucket).toBe('original-library');
+    expect(restored.s3.credentialRef).toBe('local-reference');
+    expect(restored.s3.accessKeyId).toBeUndefined();
+    expect(restored.s3.secretAccessKey).toBeUndefined();
+  });
+
   it('overrides current scalar values with the backup snapshot', () => {
     const current = makeSettings({ libraryViewMode: 'list', libraryColumns: 2 });
     const backup = sanitizeSettingsForBackup(makeSettings({ libraryViewMode: 'grid' }));

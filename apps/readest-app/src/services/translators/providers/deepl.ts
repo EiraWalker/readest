@@ -1,4 +1,5 @@
 import { getAPIBaseUrl } from '@/services/environment';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { stubTranslation as _ } from '@/utils/misc';
 import { ErrorCodes, TranslationProvider } from '../types';
 import { UserPlan } from '@/types/quota';
@@ -46,6 +47,7 @@ export const deeplProvider: TranslationProvider = {
     token?: string | null,
     useCache: boolean = false,
   ): Promise<string[]> => {
+    if (isPrivateS3Mode()) throw new Error('Official translation service is unavailable');
     const authRequired = deeplProvider.authRequired;
 
     const headers: Record<string, string> = {

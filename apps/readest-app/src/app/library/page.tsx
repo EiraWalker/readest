@@ -43,6 +43,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 
 import { useEnv } from '@/context/EnvContext';
 import { useAuth } from '@/context/AuthContext';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { useThemeStore } from '@/store/themeStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useLibraryStore } from '@/store/libraryStore';
@@ -405,7 +406,7 @@ const LibraryPageContent = ({ searchParams }: { searchParams: ReadonlyURLSearchP
   usePullToRefresh(
     scrollRef,
     async () => {
-      if (!user) {
+      if (!user && !isPrivateS3Mode()) {
         navigateToLogin(router);
         return;
       }
@@ -413,7 +414,7 @@ const LibraryPageContent = ({ searchParams }: { searchParams: ReadonlyURLSearchP
       checkOPDSSubscriptions(true);
     },
     async () => {
-      if (!user) {
+      if (!user && !isPrivateS3Mode()) {
         navigateToLogin(router);
         return;
       }

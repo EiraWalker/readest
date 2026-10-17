@@ -2,6 +2,7 @@ import { mergeBookshelfStates } from '@/services/bookshelves/state';
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauriAppPlatform } from '@/services/environment';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import type { SystemSettings } from '@/types/settings';
 
 /**
@@ -26,7 +27,7 @@ export const SETTINGS_SYNC_EVENT = 'global-settings-window-sync';
 
 /**
  * Minimal cloud-sync provider selection payload. ONLY the enabled flags
- * plus the selection timestamp — never credentials (`webdav.password`
+ * plus the selection timestamp — never secret values (`webdav.password`
  * must not ride window events) and never `lastSyncedAt` (the file-sync
  * engine writes it after every push; if whole slices were broadcast, a
  * reader window's routine cursor save interleaving with a provider
@@ -36,7 +37,15 @@ export interface CloudSyncProviderFlags {
   webdav: { enabled: boolean; providerSelectedAt?: number };
   googleDrive: { enabled: boolean; providerSelectedAt?: number };
   /** Optional: absent on payloads from pre-S3 windows (treated as unchanged). */
-  s3?: { enabled: boolean; providerSelectedAt?: number };
+  s3?: {
+    enabled: boolean;
+    providerSelectedAt?: number;
+    /** Native references and connection coordinates synchronize locally, never AK/SK. */
+    endpoint?: string;
+    region?: string;
+    bucket?: string;
+    credentialRef?: string;
+  };
   /** Optional: absent on payloads from pre-OneDrive windows (treated as unchanged). */
   onedrive?: { enabled: boolean; providerSelectedAt?: number };
   /** Optional: absent on payloads from pre-iCloud windows (treated as unchanged). */
@@ -136,6 +145,14 @@ export const broadcastGlobalSettings = async (
         s3: {
           enabled: !!settings.s3?.enabled,
           providerSelectedAt: settings.s3?.providerSelectedAt,
+          ...(isPrivateS3Mode() || settings.s3?.credentialRef
+            ? {
+                endpoint: settings.s3?.endpoint,
+                region: settings.s3?.region,
+                bucket: settings.s3?.bucket,
+                credentialRef: settings.s3?.credentialRef,
+              }
+            : {}),
         },
         onedrive: {
           enabled: !!settings.onedrive?.enabled,

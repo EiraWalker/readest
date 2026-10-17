@@ -1,5 +1,6 @@
 // Per-device Send to Readest preferences, stored in localStorage (not synced
 // across devices).
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 
 const DRAIN_ENABLED_KEY = 'readest-send-drain-enabled';
 
@@ -10,6 +11,7 @@ const DRAIN_ENABLED_KEY = 'readest-send-drain-enabled';
  * the work.
  */
 export function isInboxDrainEnabled(): boolean {
+  if (isPrivateS3Mode()) return false;
   try {
     return localStorage.getItem(DRAIN_ENABLED_KEY) !== 'false';
   } catch {

@@ -12,6 +12,7 @@ import {
 import { User } from '@supabase/supabase-js';
 import { supabase } from '@/utils/supabase';
 import posthog from 'posthog-js';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 
 interface AuthContextType {
   token: string | null;
@@ -25,13 +26,13 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [token, setToken] = useState<string | null>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && !isPrivateS3Mode()) {
       return localStorage.getItem('token');
     }
     return null;
   });
   const [user, setUser] = useState<User | null>(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && !isPrivateS3Mode()) {
       const userJson = localStorage.getItem('user');
       return userJson ? JSON.parse(userJson) : null;
     }
@@ -39,6 +40,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   });
 
   useEffect(() => {
+    if (isPrivateS3Mode()) return;
     const syncSession = (
       session: { access_token: string; refresh_token: string; user: User } | null,
     ) => {

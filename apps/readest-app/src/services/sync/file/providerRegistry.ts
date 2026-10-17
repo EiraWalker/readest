@@ -57,7 +57,7 @@ const providerCacheKey = (
   }
   if (kind === 's3') {
     const c = settings.s3;
-    return `s3:${c?.enabled}:${c?.endpoint}:${c?.region}:${c?.bucket}:${c?.accessKeyId}:${c?.secretAccessKey}`;
+    return `s3:${c?.enabled}:${c?.endpoint}:${c?.region}:${c?.bucket}:${c?.credentialRef}:${c?.accessKeyId}:${c?.secretAccessKey}`;
   }
   if (kind === 'onedrive') return 'onedrive';
   if (kind === 'icloud') return 'icloud';

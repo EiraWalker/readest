@@ -1,7 +1,8 @@
 import { transferManager } from '@/services/transferManager';
 import { getReplicaAdapter, type BinaryCapability } from './replicaRegistry';
 import { isSyncCategoryEnabled } from './syncCategories';
-import { getAccessToken } from '@/utils/access';
+import { getAccessToken, getUserID } from '@/utils/access';
+import { isPrivateS3Mode } from './privateS3';
 import type { AppService, BaseDir } from '@/types/system';
 import type { ReplicaTransferFile } from '@/store/transferStore';
 import type { ClosableFile } from '@/utils/file';
@@ -43,7 +44,7 @@ const getTransferableBinary = async <T extends ReplicaBinaryRecord>(
 ): Promise<BinaryCapability<T> | null> => {
   if (!isSyncCategoryEnabled(kind)) return null;
   if (!record.contentId) return null;
-  if (!(await getAccessToken())) return null;
+  if (!(isPrivateS3Mode() ? await getUserID() : await getAccessToken())) return null;
   if (!transferManager.isReady()) return null;
   return getReplicaAdapter<T>(kind)?.binary ?? null;
 };

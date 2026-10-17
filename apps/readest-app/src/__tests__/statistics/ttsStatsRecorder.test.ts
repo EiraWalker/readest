@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   pushStats: vi.fn(),
   syncEnabled: false,
   accessToken: null as string | null,
+  privateStatsClient: {},
+  getPrivateStatsClient: vi.fn(),
 }));
 
 vi.mock('@/services/environment', () => ({
@@ -28,6 +30,9 @@ vi.mock('@/services/sync/syncCategories', () => ({
   isSyncCategoryEnabled: () => mocks.syncEnabled,
 }));
 vi.mock('@/libs/sync', () => ({ SyncClient: class {} }));
+vi.mock('@/services/sync/privateS3Runtime', () => ({
+  getPrivateS3StatsClient: mocks.getPrivateStatsClient,
+}));
 vi.mock('@/utils/access', () => ({ getAccessToken: async () => mocks.accessToken }));
 vi.mock('@/store/readerProgressStore', () => ({ getBookProgress: () => mocks.progress }));
 vi.mock('@/store/bookDataStore', () => ({
@@ -131,6 +136,7 @@ describe('TtsStatsRecorder', () => {
     mocks.progress = null;
     mocks.syncEnabled = false;
     mocks.accessToken = null;
+    mocks.getPrivateStatsClient.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -297,5 +303,35 @@ describe('TtsStatsRecorder', () => {
     await recorder.stop();
 
     expect(mocks.pushStats).not.toHaveBeenCalled();
+  });
+
+  it('pushes listening statistics to S3 without an official session token', async () => {
+    setViewPage(9, 200);
+    mocks.syncEnabled = true;
+    mocks.getPrivateStatsClient.mockResolvedValue(mocks.privateStatsClient);
+    const recorder = new TtsStatsRecorder(makeSession({ isViewAttached: true }));
+
+    recorder.onPlaybackState('playing');
+    await vi.advanceTimersByTimeAsync(60_000);
+    await recorder.stop();
+
+    expect(mocks.pushStats).toHaveBeenCalledWith(mocks.db, mocks.privateStatsClient);
+  });
+
+  it('keeps a failing S3 setup from falling back to the official service', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setViewPage(9, 200);
+    mocks.syncEnabled = true;
+    mocks.accessToken = 'official-session';
+    mocks.getPrivateStatsClient.mockRejectedValue(new Error('S3 credentials unavailable'));
+    const recorder = new TtsStatsRecorder(makeSession({ isViewAttached: true }));
+
+    recorder.onPlaybackState('playing');
+    await vi.advanceTimersByTimeAsync(60_000);
+    await recorder.stop();
+
+    expect(totalDuration()).toBeGreaterThan(0);
+    expect(mocks.pushStats).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
   });
 });

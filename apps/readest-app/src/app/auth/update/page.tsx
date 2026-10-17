@@ -5,8 +5,14 @@ import { useAuth } from '@/context/AuthContext';
 import { useThemeStore } from '@/store/themeStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { supabase } from '@/utils/supabase';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
+import { PrivateSyncPage } from '@/app/user/components/PrivateSyncPage';
 
 export default function UpdateEmailPage() {
+  return isPrivateS3Mode() ? <PrivateSyncPage /> : <OfficialUpdateEmailPage />;
+}
+
+function OfficialUpdateEmailPage() {
   const _ = useTranslation();
   const router = useRouter();
   const { user } = useAuth();

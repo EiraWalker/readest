@@ -16,6 +16,7 @@ import {
   resolveLocalBookshelf,
 } from './journal';
 import { bookshelfReplicaSchema } from './replica';
+import { getPrivateS3Identity, isPrivateS3Mode } from '@/services/sync/privateS3';
 
 let writes: Promise<void> = Promise.resolve();
 const persistState = (env: EnvConfigType, state: BookshelfState): Promise<void> => {
@@ -71,8 +72,8 @@ export const saveBookshelfDraft = async (
   // offline and mistake a failed refresh for an anonymous edit. The sync manager
   // still checks the authenticated account before publishing any queued row.
   const user = JSON.parse(localStorage.getItem('user') || '{}') as { id?: string };
-  const userId = user.id || '';
   const { settings } = useSettingsStore.getState();
+  const userId = isPrivateS3Mode() ? (getPrivateS3Identity(settings) ?? '') : user.id || '';
   const deviceId = settings.replicaDeviceId || 'local';
   const hlcStore = new LocalStorageHlcStore();
   const hlc =

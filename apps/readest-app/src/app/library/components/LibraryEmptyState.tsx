@@ -6,6 +6,7 @@ import { useEnv } from '@/context/EnvContext';
 import { useAuth } from '@/context/AuthContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAppRouter } from '@/hooks/useAppRouter';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { navigateToLogin } from '@/utils/nav';
 import LibraryImportButton from './LibraryImportButton';
 
@@ -18,6 +19,7 @@ const LibraryEmptyState: React.FC<LibraryEmptyStateProps> = ({ onImport }) => {
   const { appService } = useEnv();
   const { user } = useAuth();
   const router = useAppRouter();
+  const privateS3 = isPrivateS3Mode();
   const isMobile = appService?.isMobile ?? false;
 
   return (
@@ -36,7 +38,7 @@ const LibraryEmptyState: React.FC<LibraryEmptyStateProps> = ({ onImport }) => {
           <LibraryImportButton onImport={onImport} primary />
           {/* TODO: add a 'Browse free catalogs' secondary action that opens the
               OPDS dialog (handleShowOPDSDialog) once we settle on placement. */}
-          {!user && (
+          {(privateS3 || !user) && (
             <button
               type='button'
               className={clsx(
@@ -44,9 +46,11 @@ const LibraryEmptyState: React.FC<LibraryEmptyStateProps> = ({ onImport }) => {
                 'underline underline-offset-4',
                 'focus-visible:text-base-content focus-visible:outline-hidden',
               )}
-              onClick={() => navigateToLogin(router)}
+              onClick={() =>
+                privateS3 ? router.push('/user?section=sync') : navigateToLogin(router)
+              }
             >
-              {_('Sign in to sync your library')}
+              {privateS3 ? _('Manage Sync') : _('Sign in to sync your library')}
             </button>
           )}
         </div>

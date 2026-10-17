@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hlcPack } from '@/libs/crdt';
 import { createBookshelf } from '@/services/bookshelves/definitions';
 import { DEFAULT_SYSTEM_SETTINGS, SETTINGS_FILENAME } from '@/services/constants';
@@ -66,8 +66,57 @@ const settingsWith = (deviceId: string, bookshelves?: SystemSettings['bookshelve
 beforeEach(() => {
   localStorage.clear();
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe('saveSettings', () => {
+  it('never writes S3 keys to the settings file or its recovery backup', async () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    const { fs, files } = makeFs();
+    const settings = settingsWith('device');
+    settings.s3 = {
+      ...settings.s3,
+      enabled: true,
+      endpoint: 'https://s3.example.com',
+      bucket: 'readest',
+      accessKeyId: 'local-only-access',
+      secretAccessKey: 'local-only-secret',
+    };
+
+    await saveSettings(fs, settings);
+
+    for (const path of [SETTINGS_FILENAME, `${SETTINGS_FILENAME}.bak`]) {
+      const contents = files.get(path)!;
+      expect(contents).not.toContain('local-only-access');
+      expect(contents).not.toContain('local-only-secret');
+      expect((JSON.parse(contents) as SystemSettings).s3.bucket).toBe('readest');
+    }
+    expect(settings.s3.secretAccessKey).toBe('local-only-secret');
+  });
+
+  it('preserves standard-build S3 credentials during an unrelated settings save', async () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'false');
+    const { fs, files } = makeFs();
+    const settings = settingsWith('device');
+    settings.s3 = {
+      ...settings.s3,
+      enabled: true,
+      endpoint: 'https://s3.example.com',
+      bucket: 'existing-library',
+      accessKeyId: 'legacy-access',
+      secretAccessKey: 'legacy-secret',
+    };
+    files.set(SETTINGS_FILENAME, JSON.stringify(settings));
+
+    await saveSettings(fs, { ...settings, alwaysOnTop: true });
+
+    for (const path of [SETTINGS_FILENAME, `${SETTINGS_FILENAME}.bak`]) {
+      const persisted = JSON.parse(files.get(path)!) as SystemSettings;
+      expect(persisted.s3.accessKeyId).toBe('legacy-access');
+      expect(persisted.s3.secretAccessKey).toBe('legacy-secret');
+      expect(persisted.alwaysOnTop).toBe(true);
+    }
+  });
+
   it('keeps a bookshelf row that another window already wrote to disk', async () => {
     const { fs, writes } = makeFs();
     const newer = shelfRow(SHELF_A, 'From the other window', 2000);

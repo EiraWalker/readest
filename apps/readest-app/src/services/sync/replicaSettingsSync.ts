@@ -32,8 +32,10 @@
  * include them.
  */
 import type { SystemSettings } from '@/types/settings';
+import type { ReplicaRow } from '@/types/replica';
 import type { EnvConfigType } from '@/services/environment';
 import { useSettingsStore } from '@/store/settingsStore';
+import { getPrivateS3Identity, isPrivateS3Mode } from './privateS3';
 import { publishReplicaUpsert } from '@/services/sync/replicaPublish';
 import {
   SETTINGS_DICTIONARY_FIELDS,
@@ -41,6 +43,7 @@ import {
   SETTINGS_KIND,
   SETTINGS_REPLICA_ID,
   SETTINGS_WHITELIST,
+  getSyncedSettingsPaths,
   readPath,
   writePath,
   type SettingsRemoteRecord,
@@ -123,6 +126,9 @@ export const markExplicitProviderOrderPublish = (): void => {
  * server state with the local default values.
  */
 const lastPublishedFields = new Map<string, unknown>();
+// Joining a private space first reads its settings. Otherwise connection
+// defaults could create a row before we find out whether the space is empty.
+let privateSettingsReadySpace: string | null = null;
 
 const equalShallow = (a: unknown, b: unknown): boolean => {
   if (a === b) return true;
@@ -234,6 +240,12 @@ const setStoredLastSeenCipher = (val: Record<string, string>): void => {
 };
 
 export const publishSettingsIfChanged = async (settings: SystemSettings): Promise<void> => {
+  // Pre-connection edits are still unpublished: keep their original diff until
+  // the first S3 connection can actually enqueue a replica.
+  if (isPrivateS3Mode()) {
+    const space = getPrivateS3Identity(settings);
+    if (!space || privateSettingsReadySpace !== space) return;
+  }
   // Pass 1: figure out what's changed. Plaintext paths use the
   // in-memory snapshot; encrypted paths AND credential connection
   // metadata compare against the persisted SHA-256 hash so
@@ -257,7 +269,7 @@ export const publishSettingsIfChanged = async (settings: SystemSettings): Promis
   // web searches local while the rest of the bundle keeps syncing (#5465).
   const dictionarySync = isSyncCategoryEnabled('dictionary');
 
-  for (const path of SETTINGS_WHITELIST) {
+  for (const path of getSyncedSettingsPaths()) {
     const current = readPath(settings, path);
     if (current === undefined) continue;
     if (!dictionarySync && DICTIONARY_PATHS.has(path)) continue;
@@ -370,6 +382,28 @@ export const publishSettingsIfChanged = async (settings: SystemSettings): Promis
 };
 
 /**
+ * Called after the first settings pull has been applied. Existing remote rows
+ * keep precedence; an empty space receives this device's saved preferences,
+ * including preferences loaded from disk after a pre-connection restart.
+ */
+export const completePrivateSettingsPull = async (rows: readonly ReplicaRow[]): Promise<void> => {
+  if (!isPrivateS3Mode() || !isSyncCategoryEnabled('settings')) return;
+  const settings = useSettingsStore.getState().settings;
+  const space = getPrivateS3Identity(settings);
+  if (!space || privateSettingsReadySpace === space) return;
+  privateSettingsReadySpace = space;
+  if (rows.length > 0) return;
+
+  const paths = getSyncedSettingsPaths();
+  for (const path of paths) lastPublishedFields.delete(path);
+  clearStoredEncryptedHashes(paths);
+  // The explicit-publish gate prevents automatic provider-order changes from
+  // overwriting peers. No peer row exists here, so seed the saved order too.
+  for (const path of PATHS_REQUIRING_EXPLICIT_PUBLISH) explicitPublishPending.add(path);
+  await publishSettingsIfChanged(settings);
+};
+
+/**
  * Merge a remote settings patch into the local store, persist it to
  * disk, and update both the in-memory plaintext snapshot AND the
  * persisted encrypted-hash snapshot so the post-save publish hook
@@ -394,15 +428,13 @@ export const applyRemoteSettings = (
   // paths from an incoming patch when the user turned Dictionaries off.
   // The local plaintext copy survives untouched, and the paths are also
   // left out of the snapshot loop below so nothing echoes back (#5465).
-  const patch = isSyncCategoryEnabled('dictionary')
-    ? record.patch
-    : stripDictionaryPaths(record.patch);
+  const patch = filterRemoteSettingsPatch(record.patch);
 
   if (!settings || Object.keys(patch).length === 0) return;
 
   // Mark the incoming values as "already published" so the
   // post-save publish hook sees no diff and stays quiet.
-  for (const path of SETTINGS_WHITELIST) {
+  for (const path of getSyncedSettingsPaths()) {
     const v = readPath(patch, path);
     if (v === undefined) continue;
     if (ENCRYPTED_PATHS.has(path) || CONNECTION_PATHS.has(path)) {
@@ -428,17 +460,15 @@ export const applyRemoteSettings = (
 };
 
 /**
- * Rebuild a remote patch without the dictionary-category paths. The
- * patch only ever carries whitelisted paths (the adapter builds it from
- * SETTINGS_WHITELIST), so walking the whitelist reproduces it exactly
- * minus the skipped entries — and drops now-empty parent groups so the
- * `Object.keys(patch).length === 0` early return still fires for a
- * dictionary-only row.
+ * Rebuild from the active whitelist, including for legacy or direct callers.
+ * This also drops local S3 connection fields and dictionary preferences when
+ * disabled, leaving no empty groups that would cause a redundant save.
  */
-const stripDictionaryPaths = (patch: Partial<SystemSettings>): Partial<SystemSettings> => {
+const filterRemoteSettingsPatch = (patch: Partial<SystemSettings>): Partial<SystemSettings> => {
   const out: Record<string, unknown> = {};
-  for (const path of SETTINGS_WHITELIST) {
-    if (DICTIONARY_PATHS.has(path)) continue;
+  const dictionaryEnabled = isSyncCategoryEnabled('dictionary');
+  for (const path of getSyncedSettingsPaths()) {
+    if (!dictionaryEnabled && DICTIONARY_PATHS.has(path)) continue;
     const v = readPath(patch, path);
     if (v === undefined) continue;
     writePath(out, path, v);
@@ -481,7 +511,7 @@ const mergeSettings = (current: SystemSettings, patch: Partial<SystemSettings>):
     out.webdav = { ...current.webdav, ...patch.webdav };
   }
   if (patch.s3) {
-    // Only endpoint / region / bucket / accessKeyId / secretAccessKey are
+    // Only endpoint / region / bucket are
     // whitelisted, so the remote patch never carries the per-device fields
     // (enabled, deviceId, lastSyncedAt, providerSelectedAt, sub-toggles).
     // Spread-with-current preserves them when the remote updates the synced
@@ -526,7 +556,7 @@ let unsubscribe: (() => void) | null = null;
 export const initSettingsSync = (initialSettings?: SystemSettings): void => {
   if (unsubscribe) return;
   if (initialSettings) {
-    for (const path of SETTINGS_WHITELIST) {
+    for (const path of getSyncedSettingsPaths()) {
       const v = readPath(initialSettings, path);
       if (v === undefined) continue;
       // Encrypted paths and credential connection metadata both use the
@@ -549,6 +579,7 @@ export const initSettingsSync = (initialSettings?: SystemSettings): void => {
 /** Test seam — drop the snapshot + subscription between specs. */
 export const __resetSettingsSyncForTests = (): void => {
   lastPublishedFields.clear();
+  privateSettingsReadySpace = null;
   explicitPublishPending.clear();
   if (unsubscribe) {
     unsubscribe();

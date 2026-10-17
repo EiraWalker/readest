@@ -2,6 +2,7 @@ import type { SystemSettings } from '@/types/settings';
 import type { UserPlan } from '@/types/quota';
 import { isCloudSyncAllowed } from '@/utils/access';
 import type { FileSyncBackendKind } from '@/services/sync/file/providerRegistry';
+import { isPrivateS3Mode } from './privateS3';
 
 /**
  * The cloud sync provider kind for library data (book files, book rows,
@@ -68,7 +69,7 @@ export const hasAnyThirdPartyEnabled = (settings: SystemSettings | null | undefi
  * wins.
  */
 export const isReadestCloudEnabled = (settings: SystemSettings | null | undefined): boolean =>
-  settings?.readestCloud?.enabled ?? !hasAnyThirdPartyEnabled(settings);
+  !isPrivateS3Mode() && (settings?.readestCloud?.enabled ?? !hasAnyThirdPartyEnabled(settings));
 
 /** Every provider syncing the library on this device, Readest Cloud first. */
 export const getCloudSyncProviders = (

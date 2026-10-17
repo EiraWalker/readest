@@ -9,6 +9,8 @@ import { getAccessToken } from '@/utils/access';
 import { PlanType } from '@/types/quota';
 import { VerifiedIAP } from '@/libs/payment/iap/types';
 import Spinner from '@/components/Spinner';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
+import { PrivateSyncPage } from '@/app/user/components/PrivateSyncPage';
 
 const STRIPE_CHECK_URL = `${getAPIBaseUrl()}/stripe/check`;
 const APPLE_IAP_VERIFY_URL = `${getNodeAPIBaseUrl()}/apple/iap-verify`;
@@ -440,6 +442,7 @@ const SuccessPageWithSearchParams = () => {
 };
 
 export default function SuccessPage() {
+  if (isPrivateS3Mode()) return <PrivateSyncPage />;
   return (
     <Suspense
       fallback={

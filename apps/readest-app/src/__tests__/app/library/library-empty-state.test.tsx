@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import LibraryEmptyState from '@/app/library/components/LibraryEmptyState';
 
@@ -29,11 +29,17 @@ vi.mock('@/context/EnvContext', () => ({
   useEnv: () => useEnvMock(),
 }));
 
+beforeEach(() => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'false');
+});
+
 afterEach(() => {
   cleanup();
   useAuthMock.mockReset();
   navigateToLoginMock.mockReset();
   useEnvMock.mockReset();
+  routerStub.push.mockReset();
+  vi.unstubAllEnvs();
 });
 
 describe('LibraryEmptyState', () => {
@@ -45,7 +51,8 @@ describe('LibraryEmptyState', () => {
     expect(screen.getByRole('heading', { name: 'Start your library' })).toBeTruthy();
     expect(screen.getByText(/drop a book anywhere on this window/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Import Books' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Sign in to sync your library' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in to sync your library' }));
+    expect(navigateToLoginMock).toHaveBeenCalledWith(routerStub);
   });
 
   it('renders mobile description (no drag-drop language) when appService.isMobile', () => {
@@ -75,5 +82,20 @@ describe('LibraryEmptyState', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Import Books' }));
 
     expect(handleImport).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    null,
+    { id: 'official-session' },
+  ])('opens private sync management independently of the official user %j', (user) => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    useEnvMock.mockReturnValue({ appService: { isMobile: false } });
+    useAuthMock.mockReturnValue({ user });
+    render(<LibraryEmptyState onImport={vi.fn()} />);
+
+    expect(screen.queryByRole('button', { name: 'Sign in to sync your library' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Sync' }));
+    expect(routerStub.push).toHaveBeenCalledWith('/user?section=sync');
+    expect(navigateToLoginMock).not.toHaveBeenCalled();
   });
 });

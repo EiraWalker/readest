@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { getRuntimeConfig } from '@/services/runtimeConfig';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 
 const supabaseUrl =
   getRuntimeConfig()?.supabaseUrl ||
@@ -24,9 +25,11 @@ const READEST_CLOUD_HOSTS = [
 export const supabase = createClient(
   supabaseUrl,
   supabaseAnonKey,
-  READEST_CLOUD_HOSTS.includes(new URL(supabaseUrl).hostname)
-    ? { auth: { storageKey: 'sb-readest-auth-token' } }
-    : undefined,
+  isPrivateS3Mode()
+    ? { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }
+    : READEST_CLOUD_HOSTS.includes(new URL(supabaseUrl).hostname)
+      ? { auth: { storageKey: 'sb-readest-auth-token' } }
+      : undefined,
 );
 
 export const createSupabaseClient = (accessToken?: string) => {

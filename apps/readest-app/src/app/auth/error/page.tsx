@@ -3,8 +3,14 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/hooks/useTheme';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
+import { PrivateSyncPage } from '@/app/user/components/PrivateSyncPage';
 
 export default function AuthErrorPage() {
+  return isPrivateS3Mode() ? <PrivateSyncPage /> : <OfficialAuthErrorPage />;
+}
+
+function OfficialAuthErrorPage() {
   const router = useRouter();
   useTheme({ systemUIVisible: false });
 

@@ -98,6 +98,34 @@ afterEach(() => {
 });
 
 describe('replicaPullAndApply (dictionary adapter)', () => {
+  test.each([
+    'missing-manifest',
+    'missing-files',
+    'queue-not-ready',
+  ])('keeps binary %s repair replayable without a metadata acknowledgement', async (mode) => {
+    const row = baseRow({
+      manifest_jsonb: mode === 'missing-manifest' ? null : manifest(['webster.mdx']),
+    });
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const queueReplicaDownload = vi.fn(() => (mode === 'queue-not-ready' ? null : 'transfer-id'));
+    const queueLocalBinaryUpload = vi.fn<(record: ImportedDictionary) => Promise<void>>(
+      async () => {},
+    );
+    const deps = {
+      ...makeDeps(),
+      pull: async () => [row],
+      findByContentId: () => baseDict(),
+      onRowApplied,
+      queueReplicaDownload,
+      queueLocalBinaryUpload,
+    };
+    await replicaPullAndApply(deps);
+    await replicaPullAndApply(deps);
+    expect(onRowApplied).not.toHaveBeenCalled();
+    if (mode === 'missing-manifest') expect(queueLocalBinaryUpload).toHaveBeenCalledTimes(2);
+    else expect(queueReplicaDownload).toHaveBeenCalledTimes(2);
+  });
+
   test('no-op when pull returns no rows', async () => {
     const deps = makeDeps();
     await replicaPullAndApply(deps);
@@ -481,6 +509,257 @@ describe('replicaPullAndApply credentials category gate (opds adapter)', () => {
 
   afterEach(() => {
     useSettingsStore.setState({ settings: undefined as unknown as SystemSettings } as never);
+  });
+
+  test('a rejected row cannot prompt, decrypt, apply or acknowledge and can be retried later', async () => {
+    setCredentialsCategory(true);
+    let allowed = false;
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const canApplyRow = vi.fn<(row: ReplicaRow) => Promise<boolean>>(async () => allowed);
+    const deps = { ...makeOpdsDeps(), pull: async () => [opdsRow()], canApplyRow, onRowApplied };
+    await replicaPullAndApply(deps);
+    expect(deps.applyRemote).not.toHaveBeenCalled();
+    expect(passphraseMocks.ensure).not.toHaveBeenCalled();
+    expect(passphraseMocks.remember).not.toHaveBeenCalled();
+    expect(cryptoMocks.decryptField).not.toHaveBeenCalled();
+    expect(onRowApplied).not.toHaveBeenCalled();
+
+    allowed = true;
+    cryptoMocks.isUnlocked.mockReturnValue(true);
+    cryptoMocks.decryptField.mockResolvedValue('plain');
+    await replicaPullAndApply(deps);
+    expect(deps.applyRemote).toHaveBeenCalledOnce();
+    expect(onRowApplied).toHaveBeenCalledOnce();
+  });
+
+  test('a local edit made during awaited decryption rejects the old projection without acknowledgement', async () => {
+    setCredentialsCategory(true);
+    cryptoMocks.isUnlocked.mockReturnValue(true);
+    let release: (value: string) => void = () => {
+      throw new Error('Decrypt is not pending');
+    };
+    const pending = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    cryptoMocks.decryptField.mockImplementationOnce(async () => pending).mockResolvedValue('plain');
+    let localName = 'Initial local draft';
+    const local: OPDSCatalog = {
+      id: 'local-opds',
+      name: localName,
+      url: 'https://example.com/opds',
+    };
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const deps = {
+      ...makeOpdsDeps(),
+      pull: async () => [opdsRow()],
+      findByContentId: () => local,
+      canApplyRow: async () => localName === 'Initial local draft',
+      onRowApplied,
+    };
+    const run = replicaPullAndApply(deps);
+    await vi.waitFor(() => expect(cryptoMocks.decryptField).toHaveBeenCalledOnce());
+    localName = 'New local draft';
+    release('plain');
+    await run;
+    expect(deps.applyRemote).not.toHaveBeenCalled();
+    expect(onRowApplied).not.toHaveBeenCalled();
+
+    localName = 'Initial local draft';
+    await replicaPullAndApply(deps);
+    expect(deps.applyRemote).toHaveBeenCalledOnce();
+    expect(onRowApplied).toHaveBeenCalledOnce();
+  });
+
+  test('rechecks eligibility before applying a tombstone', async () => {
+    const row = opdsRow();
+    delete row.fields_jsonb['username'];
+    delete row.fields_jsonb['password'];
+    row.deleted_at_ts = hlcPack(NOW + 1, 0, DEV);
+    row.updated_at_ts = row.deleted_at_ts;
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const canApplyRow = vi.fn<(row: ReplicaRow) => Promise<boolean>>();
+    canApplyRow.mockResolvedValueOnce(true).mockResolvedValue(false);
+    const deps = { ...makeOpdsDeps(), pull: async () => [row], canApplyRow, onRowApplied };
+    await replicaPullAndApply(deps);
+    expect(deps.softDeleteByContentId).not.toHaveBeenCalled();
+    expect(onRowApplied).not.toHaveBeenCalled();
+
+    canApplyRow.mockResolvedValue(true);
+    await replicaPullAndApply(deps);
+    expect(deps.softDeleteByContentId).toHaveBeenCalledOnce();
+    expect(onRowApplied).toHaveBeenCalledOnce();
+  });
+
+  test('acknowledges the original metadata row only after local application and awaits the callback', async () => {
+    const row = opdsRow();
+    delete row.fields_jsonb['username'];
+    delete row.fields_jsonb['password'];
+    const applyRemote = vi.fn<(catalog: OPDSCatalog) => void>();
+    let release: () => void = () => {
+      throw new Error('ACK is not pending');
+    };
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const onRowApplied = vi.fn<(applied: ReplicaRow) => Promise<void>>(async (applied) => {
+      expect(applied).toBe(row);
+      expect(applyRemote).toHaveBeenCalledOnce();
+      await pending;
+    });
+    const deps = { ...makeOpdsDeps(), pull: async () => [row], applyRemote, onRowApplied };
+    let finished = false;
+    const run = replicaPullAndApply(deps).then(() => {
+      finished = true;
+    });
+    await vi.waitFor(() => expect(onRowApplied).toHaveBeenCalledOnce());
+    expect(finished).toBe(false);
+    release();
+    await run;
+    expect(finished).toBe(true);
+  });
+
+  test.each([
+    'locked',
+    'cancelled',
+    'failed',
+    'partial',
+  ])('does not acknowledge %s decryption and accepts the same cipher after recovery', async (mode) => {
+    setCredentialsCategory(true);
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const rows: ReplicaRow[] = [];
+    const deps = {
+      ...makeOpdsDeps(),
+      silentDecrypt: mode === 'locked',
+      onRowApplied,
+      pull: async () => {
+        const row = opdsRow();
+        rows.push(row);
+        return [row];
+      },
+    };
+    if (mode === 'cancelled')
+      passphraseMocks.ensure.mockRejectedValue(new SyncError('NO_PASSPHRASE', 'Cancelled'));
+    if (mode === 'failed' || mode === 'partial') {
+      cryptoMocks.isUnlocked.mockReturnValue(true);
+      let field = 0;
+      cryptoMocks.decryptField.mockImplementation(async () => {
+        field += 1;
+        if (mode === 'partial' && field === 1) return 'plain';
+        throw new SyncError('SALT_NOT_FOUND', 'Synthetic missing salt');
+      });
+    }
+    await replicaPullAndApply(deps);
+    expect(deps.applyRemote).toHaveBeenCalledOnce();
+    expect(onRowApplied).not.toHaveBeenCalled();
+
+    cryptoMocks.isUnlocked.mockReturnValue(true);
+    cryptoMocks.decryptField.mockResolvedValue('plain');
+    await replicaPullAndApply(deps);
+    expect(onRowApplied).toHaveBeenCalledOnce();
+    expect(onRowApplied.mock.calls[0]?.[0]).toBe(rows[1]);
+    expect(deps.applyRemote).toHaveBeenLastCalledWith(
+      expect.objectContaining({ username: 'plain', password: 'plain' }),
+    );
+  });
+
+  test('failed local application remains unacknowledged and can be retried', async () => {
+    const row = opdsRow();
+    delete row.fields_jsonb['username'];
+    delete row.fields_jsonb['password'];
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const applyRemote = vi.fn<(catalog: OPDSCatalog) => void>();
+    applyRemote.mockImplementationOnce(() => {
+      throw new Error('Synthetic local application failure');
+    });
+    const deps = { ...makeOpdsDeps(), pull: async () => [row], applyRemote, onRowApplied };
+    await replicaPullAndApply(deps);
+    expect(onRowApplied).not.toHaveBeenCalled();
+    await replicaPullAndApply(deps);
+    expect(onRowApplied).toHaveBeenCalledOnce();
+    expect(onRowApplied.mock.calls[0]?.[0]).toBe(row);
+  });
+
+  test('acknowledges unchanged previously decrypted ciphertext while locked without prompting', async () => {
+    setCredentialsCategory(true);
+    const row = opdsRow();
+    const local: OPDSCatalog = {
+      id: 'local-opds',
+      contentId: row.replica_id,
+      name: 'Existing catalog',
+      url: 'https://example.com/opds',
+      username: 'preserved-user',
+      password: 'preserved-password',
+      lastSeenCipher: { username: cipher.c, password: cipher.c },
+    };
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const deps = {
+      ...makeOpdsDeps(),
+      pull: async () => [row],
+      findByContentId: () => local,
+      onRowApplied,
+    };
+    await replicaPullAndApply(deps);
+    expect(cryptoMocks.isUnlocked()).toBe(false);
+    expect(passphraseMocks.ensure).not.toHaveBeenCalled();
+    expect(cryptoMocks.decryptField).not.toHaveBeenCalled();
+    expect(deps.applyRemote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Project Gutenberg',
+        lastSeenCipher: local.lastSeenCipher,
+      }),
+    );
+    expect(onRowApplied).toHaveBeenCalledOnce();
+    expect(onRowApplied.mock.calls[0]?.[0]).toBe(row);
+  });
+
+  test('intentional credentials opt-out acknowledges applied metadata without decrypting', async () => {
+    setCredentialsCategory(false);
+    const row = opdsRow();
+    const local: OPDSCatalog = {
+      id: 'local-opds',
+      contentId: row.replica_id,
+      name: 'Old name',
+      url: 'https://example.com/opds',
+    };
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const deps = {
+      ...makeOpdsDeps(),
+      pull: async () => [row],
+      findByContentId: () => local,
+      onRowApplied,
+    };
+    await replicaPullAndApply(deps);
+    expect(onRowApplied).toHaveBeenCalledOnce();
+    expect(onRowApplied.mock.calls[0]?.[0]).toBe(row);
+    expect(cryptoMocks.decryptField).not.toHaveBeenCalled();
+    expect(deps.applyRemote).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Project Gutenberg' }),
+    );
+  });
+
+  test('acknowledges a metadata tombstone only after its local deletion succeeds', async () => {
+    const row = opdsRow();
+    delete row.fields_jsonb['username'];
+    delete row.fields_jsonb['password'];
+    row.deleted_at_ts = hlcPack(NOW + 1, 0, DEV);
+    row.updated_at_ts = row.deleted_at_ts;
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const deps = { ...makeOpdsDeps(), pull: async () => [row], onRowApplied };
+    await replicaPullAndApply(deps);
+    expect(deps.softDeleteByContentId).toHaveBeenCalledWith(row.replica_id);
+    expect(deps.applyRemote).not.toHaveBeenCalled();
+    expect(onRowApplied).toHaveBeenCalledOnce();
+    expect(onRowApplied.mock.calls[0]?.[0]).toBe(row);
+  });
+
+  test('does not acknowledge metadata that cannot be unpacked', async () => {
+    const row = opdsRow();
+    delete row.fields_jsonb['name'];
+    const onRowApplied = vi.fn<(row: ReplicaRow) => void>();
+    const deps = { ...makeOpdsDeps(), pull: async () => [row], onRowApplied };
+    await replicaPullAndApply(deps);
+    expect(deps.applyRemote).not.toHaveBeenCalled();
+    expect(onRowApplied).not.toHaveBeenCalled();
   });
 
   test('strips cipher fields and never prompts when credentials sync is OFF (default)', async () => {

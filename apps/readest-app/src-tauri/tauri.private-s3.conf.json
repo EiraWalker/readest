@@ -1,0 +1,32 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Readest Private",
+  "mainBinaryName": "readest-private",
+  "identifier": "com.readest.private-s3",
+  "build": {
+    "beforeDevCommand": "pnpm dev:private-s3",
+    "beforeBuildCommand": "pnpm build:private-s3"
+  },
+  "app": {
+    "security": {
+      "assetProtocol": {
+        "scope": {
+          "allow": [
+            "$RESOURCE/**",
+            "$APPDATA/**/*",
+            "$APPCACHE/**/*",
+            "$TEMP/**/*",
+            "**/ReadestPrivate/**/*"
+          ]
+        }
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["readest-private"]
+      }
+    }
+  }
+}

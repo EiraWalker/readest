@@ -1,4 +1,4 @@
-import { describe, expect, test, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, test, vi, beforeEach } from 'vitest';
 import type { SystemSettings } from '@/types/settings';
 import type { FileSystem } from '@/types/system';
 
@@ -16,7 +16,7 @@ vi.mock('@/services/environment', () => ({
 }));
 
 import { emit } from '@tauri-apps/api/event';
-import { getDefaultViewSettings } from '@/services/settingsService';
+import { getDefaultViewSettings, saveSettings } from '@/services/settingsService';
 import {
   DEFAULT_SYSTEM_SETTINGS,
   DEFAULT_READSETTINGS,
@@ -27,6 +27,51 @@ import {
   mergeSyncedGlobalSettings,
   type SettingsSyncPayload,
 } from '@/utils/settingsSync';
+
+afterEach(() => vi.unstubAllEnvs());
+
+test.each([
+  ['first connection', true, undefined],
+  ['credential rotation', true, 'old-local-reference'],
+  ['normal native credential rotation', false, 'old-local-reference'],
+] as const)('a reader preserves the new S3 connection after %s', async (_scenario, privateMode, oldRef) => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', String(privateMode));
+  vi.mocked(emit).mockClear();
+  const receiver = makeFullSettings({
+    s3: {
+      enabled: !!oldRef,
+      endpoint: oldRef ? 'https://s3.example.com' : '',
+      bucket: oldRef ? 'books' : '',
+      credentialRef: oldRef,
+    },
+  });
+  const publisher = makeFullSettings({
+    s3: {
+      enabled: true,
+      endpoint: 'https://s3.example.com',
+      region: 'north',
+      bucket: 'books',
+      credentialRef: 'new-local-reference',
+      accessKeyId: 'DO_NOT_BROADCAST_ACCESS',
+      secretAccessKey: 'DO_NOT_BROADCAST_SECRET',
+    },
+  });
+  await broadcastGlobalSettings(publisher, { includeCloudSyncProviders: true });
+  const payload = vi.mocked(emit).mock.calls[0]![1] as SettingsSyncPayload;
+  expect(JSON.stringify(payload)).not.toContain('DO_NOT_BROADCAST');
+
+  const disk = new Map<string, string>();
+  const fs = {
+    readFile: async (path: string) => disk.get(path) ?? null,
+    writeFile: async (path: string, _base: unknown, contents: string) => disk.set(path, contents),
+  } as unknown as FileSystem;
+  await saveSettings(fs, mergeSyncedGlobalSettings(receiver, payload));
+  const persisted = JSON.parse(disk.get('settings.json')!) as SystemSettings;
+  expect(persisted.s3.credentialRef).toBe('new-local-reference');
+  expect(persisted.s3.endpoint).toBe('https://s3.example.com');
+  expect(persisted.s3.bucket).toBe('books');
+  expect(persisted.s3.region).toBe('north');
+});
 
 const local = {
   webdav: { enabled: false, password: 'secret' },

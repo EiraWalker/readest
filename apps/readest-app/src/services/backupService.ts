@@ -3,6 +3,7 @@ import type { Configuration, FileEntry, ZipWriter } from '@zip.js/zip.js';
 import { AppService, FileItem } from '@/types/system';
 import { EXTS } from '@/libs/document';
 import { isTauriAppPlatform } from '@/services/environment';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { Book, BookConfig, BookNote } from '@/types/book';
 import { SystemSettings } from '@/types/settings';
 import type { PageStatEvent, StatBook } from '@/types/statistics';
@@ -77,6 +78,10 @@ export const BACKUP_SETTINGS_BLACKLIST = [
   's3.deviceId',
   's3.lastSyncedAt',
   's3.providerSelectedAt',
+  // S3 credentials and their native-store reference always stay on this device.
+  's3.accessKeyId',
+  's3.secretAccessKey',
+  's3.credentialRef',
   'icloud.deviceId',
   'icloud.lastSyncedAt',
   'icloud.providerSelectedAt',
@@ -111,8 +116,7 @@ export const BACKUP_SETTINGS_CREDENTIAL_FIELDS = [
   'pagebound.refreshToken',
   'pagebound.apiToken',
   'notion.accessToken',
-  // S3 access keys are strong, long-lived cloud credentials — strip them from
-  // unencrypted backup zips unless the user opts into including credentials.
+  // S3 keys are also always excluded by BACKUP_SETTINGS_BLACKLIST above.
   's3.accessKeyId',
   's3.secretAccessKey',
   'aiSettings.aiGatewayApiKey',
@@ -221,9 +225,22 @@ export function mergeRestoredSettings(
   current: SystemSettings,
   backup: Partial<SystemSettings>,
 ): SystemSettings {
+  const portableBackup = { ...backup };
+  if (portableBackup.s3) {
+    portableBackup.s3 = { ...portableBackup.s3 };
+    delete portableBackup.s3.accessKeyId;
+    delete portableBackup.s3.secretAccessKey;
+    delete portableBackup.s3.credentialRef;
+    if (isPrivateS3Mode() && current.s3?.endpoint && current.s3.bucket) {
+      // An existing library keeps its space even when a backup came from a peer.
+      portableBackup.s3.endpoint = current.s3.endpoint;
+      portableBackup.s3.region = current.s3.region;
+      portableBackup.s3.bucket = current.s3.bucket;
+    }
+  }
   const merged = deepMerge(
     current as unknown as Record<string, unknown>,
-    backup as unknown as Record<string, unknown>,
+    portableBackup as unknown as Record<string, unknown>,
   ) as unknown as SystemSettings;
   if (current.bookshelves || backup.bookshelves)
     merged.bookshelves = mergeBookshelfStates(current.bookshelves, backup.bookshelves);

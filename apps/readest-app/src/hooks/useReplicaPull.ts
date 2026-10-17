@@ -2,8 +2,9 @@ import {
   applyRemoteBookshelfRows,
   replayBookshelfOperations,
 } from '@/services/bookshelves/persistence';
+import { bookshelfReplicaSchema } from '@/services/bookshelves/replica';
 import { useEffect } from 'react';
-import { useAuth } from '@/context/AuthContext';
+import { useSyncIdentity } from '@/hooks/useSyncIdentity';
 import { useEnv } from '@/context/EnvContext';
 import { useCustomDictionaryStore, findDictionaryByContentId } from '@/store/customDictionaryStore';
 import {
@@ -42,6 +43,7 @@ import {
   clearStoredEncryptedHashes,
   getStoredLastSeenCipher,
   publishSettingsIfChanged,
+  completePrivateSettingsPull,
 } from '@/services/sync/replicaSettingsSync';
 import { useSettingsStore } from '@/store/settingsStore';
 import { queueReplicaBinaryUpload } from '@/services/sync/replicaBinaryUpload';
@@ -51,7 +53,9 @@ import {
   type ReplicaLocalRecord,
 } from '@/services/sync/replicaPullAndApply';
 import type { ReplicaAdapter } from '@/services/sync/replicaRegistry';
-import { getAccessToken } from '@/utils/access';
+import { getAccessToken, getUserID } from '@/utils/access';
+import { acknowledgeReplicaPull, canApplyReplicaPull } from '@/libs/replicaSyncClient';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { isSyncCategoryEnabled } from '@/services/sync/syncCategories';
 import { uniqueId } from '@/utils/misc';
 import type { EnvConfigType } from '@/services/environment';
@@ -195,6 +199,8 @@ const buildReplicaPullDeps = <T extends ReplicaLocalRecord>(
   softDeleteByContentId: config.softDeleteByContentId,
   silentDecrypt: config.silentDecrypt,
   onSaltNotFound: config.onSaltNotFound,
+  onRowApplied: isPrivateS3Mode() ? acknowledgeReplicaPull : undefined,
+  canApplyRow: isPrivateS3Mode() ? canApplyReplicaPull : undefined,
   // The bundle / binary callbacks below are only reached when the
   // adapter declares a `binary` capability — replicaPullAndApply
   // short-circuits metadata-only kinds before invoking them. The
@@ -229,7 +235,7 @@ const buildReplicaPullDeps = <T extends ReplicaLocalRecord>(
     ? undefined
     : async () => {
         if (!isSyncCategoryEnabled(config.kind)) return false;
-        return !!(await getAccessToken());
+        return !!(isPrivateS3Mode() ? await getUserID() : await getAccessToken());
       },
 });
 
@@ -391,10 +397,19 @@ const runPullForKind = async (
       await replayBookshelfOperations(envConfig);
       // Batched rows already passed the category/auth gates and advanced the
       // cursor, so apply them even if those gates change after the fetch.
-      if (!pullOverride && (!isSyncCategoryEnabled('bookshelf') || !(await getAccessToken())))
+      if (
+        !pullOverride &&
+        (!isSyncCategoryEnabled('bookshelf') ||
+          !(isPrivateS3Mode() ? await getUserID() : await getAccessToken()))
+      )
         return;
       const rows = await (pullOverride ? pullOverride() : ctx.manager.pull('bookshelf', pullOpts));
       await applyRemoteBookshelfRows(envConfig, rows);
+      if (isPrivateS3Mode()) {
+        for (const row of rows) {
+          if (bookshelfReplicaSchema.safeParse(row).success) await acknowledgeReplicaPull(row);
+        }
+      }
       return;
     }
     case 'dictionary':
@@ -493,18 +508,25 @@ const runPullForKind = async (
         ),
       );
       return;
-    case 'settings':
-      await replicaPullAndApply(
-        buildReplicaPullDeps(
-          ctx.manager,
-          service,
-          envConfig,
-          settingsPullConfig(envConfig),
-          pullOpts,
-          pullOverride,
-        ),
+    case 'settings': {
+      const deps = buildReplicaPullDeps(
+        ctx.manager,
+        service,
+        envConfig,
+        settingsPullConfig(envConfig),
+        pullOpts,
+        pullOverride,
       );
+      const pull = deps.pull;
+      let pulledRows: ReplicaRow[] | null = null;
+      deps.pull = async () => {
+        pulledRows = await pull();
+        return pulledRows;
+      };
+      await replicaPullAndApply(deps);
+      if (pulledRows) await completePrivateSettingsPull(pulledRows);
       return;
+    }
   }
 };
 
@@ -522,6 +544,12 @@ const triggerIncrementalPullAll = (): void => {
   const ctx = getReplicaSync();
   if (!ctx) return;
   const { service, envConfig } = autoSyncContext;
+
+  // Private publishing waits for this first read. Keep the existing
+  // foreground/online/periodic retry entry points usable when it failed.
+  if (isPrivateS3Mode() && !pulledKinds.has('settings') && isSyncCategoryEnabled('settings')) {
+    void ensureSettingsBootPulled(service, envConfig);
+  }
 
   const kindsToPull: ReplicaKind[] = [];
   for (const kind of registeredKinds) {
@@ -615,6 +643,7 @@ const ensureSettingsBootPulled = (service: AppService, envConfig: EnvConfigType)
     .catch((err) => {
       console.warn('replica settings pull failed', err);
       pulledKinds.delete('settings');
+      settingsBootPullPromise = null;
     })
     .finally(() => {
       pullInFlight.delete('settings');
@@ -670,7 +699,7 @@ export const useReplicaPull = ({
   delayMs = REPLICA_PULL_DEFAULT_DELAY_MS,
 }: UseReplicaPullOpts): void => {
   const { envConfig, appService } = useEnv();
-  const { user } = useAuth();
+  const user = useSyncIdentity();
   // Stable cache key so the effect doesn't re-run when the caller
   // passes a freshly-allocated array literal each render.
   const kindsKey = kinds.join(',');

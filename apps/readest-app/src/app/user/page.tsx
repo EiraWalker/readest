@@ -1,6 +1,8 @@
 'use client';
 
 import clsx from 'clsx';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
+import { PrivateSyncPage } from './components/PrivateSyncPage';
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAppRouter } from '@/hooks/useAppRouter';
@@ -413,4 +415,6 @@ const ProfilePage = () => {
   );
 };
 
-export default ProfilePage;
+export default function UserPage() {
+  return isPrivateS3Mode() ? <PrivateSyncPage /> : <ProfilePage />;
+}

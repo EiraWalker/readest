@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   SETTINGS_DICTIONARY_FIELDS,
   SETTINGS_KIND,
@@ -14,6 +14,7 @@ import type { FieldEnvelope, Hlc, ReplicaRow } from '@/types/replica';
 import type { SystemSettings } from '@/types/settings';
 
 const HLC = '00000000001-00000000-dev' as Hlc;
+afterEach(() => vi.unstubAllEnvs());
 const env = <T>(v: T): FieldEnvelope<T> => ({ v, t: HLC, s: 'dev' });
 
 const makeRow = (fields: Record<string, FieldEnvelope<unknown>>): ReplicaRow => ({
@@ -29,6 +30,24 @@ const makeRow = (fields: Record<string, FieldEnvelope<unknown>>): ReplicaRow => 
 });
 
 describe('settingsAdapter', () => {
+  test('private S3 connection coordinates remain local on publish and pull', () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    const record: SettingsRemoteRecord = {
+      name: 'singleton',
+      patch: {
+        s3: { enabled: true, endpoint: 'https://s3.example.com', region: 'north', bucket: 'books' },
+      },
+    };
+    expect(settingsAdapter.pack(record)).toEqual({});
+    expect(
+      settingsAdapter.unpack({
+        's3.endpoint': 'https://another.example.com',
+        's3.region': 'other-region',
+        's3.bucket': 'other-books',
+      }).patch,
+    ).toEqual({});
+  });
+
   test('kind + schemaVersion + replica id are stable', () => {
     expect(settingsAdapter.kind).toBe('settings');
     expect(settingsAdapter.schemaVersion).toBe(1);
@@ -193,8 +212,8 @@ describe('settingsAdapter', () => {
     expect(fields['s3.endpoint']).toBe('https://acc.r2.cloudflarestorage.com');
     expect(fields['s3.region']).toBe('auto');
     expect(fields['s3.bucket']).toBe('readest');
-    expect(fields['s3.accessKeyId']).toBe('AKIA');
-    expect(fields['s3.secretAccessKey']).toBe('shh');
+    expect(fields['s3.accessKeyId']).toBeUndefined();
+    expect(fields['s3.secretAccessKey']).toBeUndefined();
     // Per-device bookkeeping must not ship.
     expect(fields['s3.enabled']).toBeUndefined();
     expect(fields['s3.deviceId']).toBeUndefined();
@@ -203,9 +222,18 @@ describe('settingsAdapter', () => {
 
     const out = settingsAdapter.unpack(fields);
     expect(out.patch.s3?.endpoint).toBe('https://acc.r2.cloudflarestorage.com');
-    expect(out.patch.s3?.accessKeyId).toBe('AKIA');
-    expect(out.patch.s3?.secretAccessKey).toBe('shh');
+    expect(out.patch.s3?.accessKeyId).toBeUndefined();
+    expect(out.patch.s3?.secretAccessKey).toBeUndefined();
     expect(out.patch.s3?.enabled).toBeUndefined();
+    const legacyRemote = settingsAdapter.unpack({
+      ...fields,
+      's3.accessKeyId': 'REMOTE_ACCESS',
+      's3.secretAccessKey': 'REMOTE_SECRET',
+      's3.credentialRef': 'another-device',
+    });
+    expect(legacyRemote.patch.s3?.accessKeyId).toBeUndefined();
+    expect(legacyRemote.patch.s3?.secretAccessKey).toBeUndefined();
+    expect(legacyRemote.patch.s3?.credentialRef).toBeUndefined();
   });
 
   test('pack ∘ unpack round-trips kosync.customHeaders, serialized to a JSON string across the boundary', () => {
@@ -298,7 +326,7 @@ describe('settingsAdapter', () => {
     expect(settingsAdapter.encryptedFields).toContain('bookorbit.customHeaders');
   });
 
-  test('declares encryptedFields covering kosync / bookorbit / readwise / hardcover / webdav / s3 credentials only (not serverUrl / endpoint)', () => {
+  test('declares encryptedFields for opt-in credentials, excluding local S3 keys', () => {
     expect(settingsAdapter.encryptedFields).toEqual([
       'kosync.username',
       'kosync.userkey',
@@ -313,8 +341,6 @@ describe('settingsAdapter', () => {
       'notion.accessToken',
       'webdav.username',
       'webdav.password',
-      's3.accessKeyId',
-      's3.secretAccessKey',
     ]);
   });
 
@@ -376,8 +402,9 @@ describe('SETTINGS_WHITELIST', () => {
     expect(SETTINGS_WHITELIST).toContain('s3.endpoint');
     expect(SETTINGS_WHITELIST).toContain('s3.region');
     expect(SETTINGS_WHITELIST).toContain('s3.bucket');
-    expect(SETTINGS_WHITELIST).toContain('s3.accessKeyId');
-    expect(SETTINGS_WHITELIST).toContain('s3.secretAccessKey');
+    expect(SETTINGS_WHITELIST).not.toContain('s3.accessKeyId');
+    expect(SETTINGS_WHITELIST).not.toContain('s3.secretAccessKey');
+    expect(SETTINGS_WHITELIST).not.toContain('s3.credentialRef');
     expect(SETTINGS_WHITELIST).not.toContain('s3.enabled');
     expect(SETTINGS_WHITELIST).not.toContain('s3.deviceId');
     expect(SETTINGS_WHITELIST).not.toContain('s3.providerSelectedAt');

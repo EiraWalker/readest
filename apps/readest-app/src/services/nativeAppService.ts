@@ -54,6 +54,7 @@ import { detectViewTransitionGroup, detectViewTransitionsAPI } from '@/utils/vie
 import { useLibraryStore } from '@/store/libraryStore';
 
 import { BaseAppService } from './appService';
+import { isPrivateS3Mode } from './sync/privateS3';
 import {
   buildCoverThumbnailRequests,
   COVER_THUMBNAIL_READY_EVENT,
@@ -661,7 +662,16 @@ export class NativeAppService extends BaseAppService {
         console.warn('[nativeAppService] is_updater_disabled failed:', err);
       }
     }
-    if (
+    const privateRoot = isPrivateS3Mode() ? await join(execDir, 'ReadestPrivate') : undefined;
+    if (privateRoot) {
+      await this.fs.createDir(privateRoot, 'None', true);
+      this.isPortableApp = true;
+      this.fs.resolvePath = getPathResolver({
+        customRootDir: privateRoot,
+        isPortable: true,
+        execDir: privateRoot,
+      });
+    } else if (
       process.env['NEXT_PUBLIC_PORTABLE_APP'] ||
       (await this.fs.exists(`${execDir}/${SETTINGS_FILENAME}`, 'None'))
     ) {
@@ -678,7 +688,7 @@ export class NativeAppService extends BaseAppService {
       this.fs.resolvePath = getPathResolver({
         customRootDir,
         isPortable: this.isPortableApp,
-        execDir,
+        execDir: privateRoot ?? execDir,
       });
       // Validate the root before anything depends on it. We deliberately keep
       // the custom resolver installed when it fails: silently falling back to
@@ -814,7 +824,10 @@ export class NativeAppService extends BaseAppService {
     this.fs.resolvePath = getPathResolver({
       customRootDir,
       isPortable: this.isPortableApp,
-      execDir: this.execDir,
+      execDir:
+        isPrivateS3Mode() && this.execDir
+          ? await join(this.execDir, 'ReadestPrivate')
+          : this.execDir,
     });
     await this.prepareBooksDir();
   }

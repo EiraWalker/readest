@@ -133,6 +133,14 @@ export class ReplicaSyncManager {
     this.scheduleDebouncedFlush();
   }
 
+  /** Pending rows remain queued while a push is in flight, until acknowledged. */
+  hasPendingRow(kind: string, replicaId: string): boolean {
+    for (const row of this.dirty.values()) {
+      if (row.kind === kind && row.replica_id === replicaId) return true;
+    }
+    return false;
+  }
+
   private scheduleDebouncedFlush(): void {
     if (this.debounceTimer !== null) clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => {

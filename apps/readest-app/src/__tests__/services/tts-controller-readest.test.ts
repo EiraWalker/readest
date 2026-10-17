@@ -192,7 +192,20 @@ beforeEach(() => {
   controller = new TTSController(appService, view, true);
 });
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.unstubAllEnvs();
+});
+
+test('private S3 build never initializes or lists Readest Voice while keeping Edge', async () => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  await controller.init();
+  await controller.getVoices('en-US');
+  expect(readest().init).not.toHaveBeenCalled();
+  expect(readest().getAllVoices).not.toHaveBeenCalled();
+  expect(h.warmup).not.toHaveBeenCalled();
+  expect(controller.ttsClient.name).toBe('edge-tts');
+});
 
 describe('construction', () => {
   test('Edge and Readest share one per-book cache store', () => {

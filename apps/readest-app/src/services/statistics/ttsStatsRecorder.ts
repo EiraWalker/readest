@@ -19,6 +19,7 @@ import * as foliateProgress from 'foliate-js/progress.js';
 import env from '@/services/environment';
 import { SyncClient } from '@/libs/sync';
 import { isSyncCategoryEnabled } from '@/services/sync/syncCategories';
+import { getPrivateS3StatsClient } from '@/services/sync/privateS3Runtime';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { getBookProgress } from '@/store/readerProgressStore';
 import { DEFAULT_STATS_TRACKING_CONFIG, type StatBook } from '@/types/statistics';
@@ -342,10 +343,16 @@ export class TtsStatsRecorder {
   async #push(): Promise<void> {
     const db = this.#db;
     if (!db || !isSyncCategoryEnabled('stats')) return;
-    // No AuthContext headless, so the session token stands in for `user`.
-    const token = await getAccessToken().catch(() => null);
-    if (!token) return;
     try {
+      const privateClient = await getPrivateS3StatsClient();
+      if (privateClient) {
+        await pushStats(db, privateClient);
+        return;
+      }
+      // The official backend still needs its session token; private S3 uses
+      // device-local credentials and works without an AuthContext.
+      const token = await getAccessToken().catch(() => null);
+      if (!token) return;
       await pushStats(db, new SyncClient());
     } catch (err) {
       console.warn('[stats] failed to push TTS listening events:', err);

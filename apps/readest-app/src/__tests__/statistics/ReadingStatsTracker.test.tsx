@@ -7,6 +7,12 @@ const mocks = vi.hoisted(() => ({
   getBookData: vi.fn(() => null as unknown),
   progress: null as BookProgress | null,
   playbackState: null as 'playing' | 'paused' | null,
+  syncIdentity: null as string | null,
+  syncEnabled: false,
+  privateStatsClient: {},
+  getPrivateStatsClient: vi.fn(),
+  pullStats: vi.fn(),
+  pushStats: vi.fn(),
   db: {
     upsertBook: vi.fn(),
     insertPageEvent: vi.fn(),
@@ -16,6 +22,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/context/EnvContext', () => ({ useEnv: () => ({ appService: {} }) }));
 vi.mock('@/context/AuthContext', () => ({ useAuth: () => ({ user: null }) }));
+vi.mock('@/hooks/useSyncIdentity', () => ({ useSyncIdentity: () => mocks.syncIdentity }));
+vi.mock('@/services/sync/privateS3Runtime', () => ({
+  getPrivateS3StatsClient: mocks.getPrivateStatsClient,
+}));
+vi.mock('@/store/settingsStore', () => ({
+  useSettingsStore: { getState: () => ({ settings: { bookorbit: { enabled: false } } }) },
+}));
 vi.mock('@/store/readerProgressStore', () => ({
   useBookProgress: () => mocks.progress,
   getBookProgress: () => mocks.progress,
@@ -27,10 +40,12 @@ vi.mock('@/services/statistics/statisticsDb', () => ({
   StatisticsDb: { open: mocks.open },
 }));
 vi.mock('@/services/statistics/statsSync', () => ({
-  pushStats: vi.fn(),
-  pullStats: vi.fn(),
+  pushStats: mocks.pushStats,
+  pullStats: mocks.pullStats,
 }));
-vi.mock('@/services/sync/syncCategories', () => ({ isSyncCategoryEnabled: () => false }));
+vi.mock('@/services/sync/syncCategories', () => ({
+  isSyncCategoryEnabled: () => mocks.syncEnabled,
+}));
 vi.mock('@/libs/sync', () => ({ SyncClient: class {} }));
 vi.mock('@/services/tts/TTSSessionManager', () => ({
   ttsSessionManager: {
@@ -46,11 +61,18 @@ import ReadingStatsTracker from '@/app/reader/components/ReadingStatsTracker';
 describe('ReadingStatsTracker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.syncIdentity = null;
+    mocks.syncEnabled = false;
+    mocks.getPrivateStatsClient.mockResolvedValue(null);
+    mocks.pullStats.mockResolvedValue(undefined);
+    mocks.pushStats.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    mocks.syncIdentity = null;
+    mocks.syncEnabled = false;
   });
 
   it('contains a database-open failure instead of leaking an unhandled rejection', async () => {
@@ -62,6 +84,19 @@ describe('ReadingStatsTracker', () => {
 
     await waitFor(() => {
       expect(warn).toHaveBeenCalledWith('[stats] background operation failed:', error);
+    });
+  });
+
+  it('pulls from the configured S3 space without an official account', async () => {
+    mocks.syncIdentity = 'private-space';
+    mocks.syncEnabled = true;
+    mocks.open.mockResolvedValueOnce(mocks.db);
+    mocks.getPrivateStatsClient.mockResolvedValue(mocks.privateStatsClient);
+
+    render(<ReadingStatsTracker bookKey='book-1' />);
+
+    await waitFor(() => {
+      expect(mocks.pullStats).toHaveBeenCalledWith(mocks.db, mocks.privateStatsClient);
     });
   });
 });

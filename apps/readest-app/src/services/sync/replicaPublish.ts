@@ -6,6 +6,30 @@ import { encryptPackedFields } from './replicaCryptoMiddleware';
 import { isCredentialsSyncEnabled, isSyncCategoryEnabled } from './syncCategories';
 import type { FieldsObject, Hlc, ReplicaRow } from '@/types/replica';
 
+const preparingRows = new Map<string, number>();
+const preparationKey = (kind: string, contentId: string): string =>
+  JSON.stringify([kind, contentId]);
+
+/** Local edits are protected while identity/encryption is still preparing the dirty row. */
+export const hasPendingReplicaPublication = (kind: string, contentId: string): boolean =>
+  preparingRows.has(preparationKey(kind, contentId));
+
+const preparePublication = async (
+  kind: string,
+  contentId: string,
+  publish: () => Promise<void>,
+): Promise<void> => {
+  const key = preparationKey(kind, contentId);
+  preparingRows.set(key, (preparingRows.get(key) ?? 0) + 1);
+  try {
+    await publish();
+  } finally {
+    const remaining = (preparingRows.get(key) ?? 1) - 1;
+    if (remaining > 0) preparingRows.set(key, remaining);
+    else preparingRows.delete(key);
+  }
+};
+
 /**
  * Build + push a CRDT row for an upsert of a single replica record.
  * Each field gets a fresh HLC stamp; updated_at_ts is the max of all
@@ -28,50 +52,56 @@ export const publishReplicaUpsert = async <T>(
   if (!ctx) return;
   const adapter = getReplicaAdapter<T>(kind);
   if (!adapter) return;
-  const userId = await getUserID();
-  if (!userId) return;
+  return preparePublication(kind, contentId, async () => {
+    const userId = await getUserID();
+    if (!userId) return;
 
-  const packed = adapter.pack(record);
-  // Credentials meta-toggle (default OFF): when the user hasn't opted
-  // into syncing sensitive fields, drop adapter.encryptedFields from
-  // the packed object before the crypto middleware ever sees them. No
-  // ciphertext is produced, no passphrase prompt fires, and nothing
-  // sensitive leaves the device. Plaintext metadata in the same row
-  // (catalog name/url, kosync.serverUrl, etc.) still ships.
-  if (
-    adapter.encryptedFields &&
-    adapter.encryptedFields.length > 0 &&
-    !isCredentialsSyncEnabled()
-  ) {
-    for (const field of adapter.encryptedFields) {
-      delete packed[field];
+    const packed = adapter.pack(record);
+    // Credentials meta-toggle (default OFF): when the user hasn't opted
+    // into syncing sensitive fields, drop adapter.encryptedFields from
+    // the packed object before the crypto middleware ever sees them. No
+    // ciphertext is produced, no passphrase prompt fires, and nothing
+    // sensitive leaves the device. Plaintext metadata in the same row
+    // (catalog name/url, kosync.serverUrl, etc.) still ships.
+    if (
+      adapter.encryptedFields &&
+      adapter.encryptedFields.length > 0 &&
+      !isCredentialsSyncEnabled()
+    ) {
+      for (const field of adapter.encryptedFields) {
+        delete packed[field];
+      }
     }
-  }
-  // Encrypts the remaining encryptedFields in place. Locked session →
-  // those fields are dropped from the push (sync without creds).
-  await encryptPackedFields(packed, adapter.encryptedFields);
-  let fields: FieldsObject = {};
-  let maxFieldHlc: Hlc | null = null;
-  for (const [key, value] of Object.entries(packed)) {
-    const t = ctx.hlc.next();
-    fields = setField(fields, key, value, t, ctx.deviceId);
-    maxFieldHlc = hlcMax(maxFieldHlc, t);
-  }
+    // Stamp this edit before asynchronous encryption so an earlier slow
+    // preparation cannot win over a later edit that finishes first.
+    const fallbackHlc = ctx.hlc.next();
+    const fieldHlcs = new Map(Object.keys(packed).map((key) => [key, ctx.hlc.next()]));
+    // Encrypts the remaining encryptedFields in place. Locked session →
+    // those fields are dropped from the push (sync without creds).
+    await encryptPackedFields(packed, adapter.encryptedFields);
+    let fields: FieldsObject = {};
+    let maxFieldHlc: Hlc | null = null;
+    for (const [key, value] of Object.entries(packed)) {
+      const t = fieldHlcs.get(key) ?? fallbackHlc;
+      fields = setField(fields, key, value, t, ctx.deviceId);
+      maxFieldHlc = hlcMax(maxFieldHlc, t);
+    }
 
-  const updatedAt = maxFieldHlc ?? ctx.hlc.next();
+    const updatedAt = maxFieldHlc ?? fallbackHlc;
 
-  const row: ReplicaRow = {
-    user_id: userId,
-    kind,
-    replica_id: contentId,
-    fields_jsonb: fields,
-    manifest_jsonb: null,
-    deleted_at_ts: null,
-    reincarnation: reincarnation ?? null,
-    updated_at_ts: updatedAt,
-    schema_version: adapter.schemaVersion,
-  };
-  ctx.manager.markDirty(row);
+    const row: ReplicaRow = {
+      user_id: userId,
+      kind,
+      replica_id: contentId,
+      fields_jsonb: fields,
+      manifest_jsonb: null,
+      deleted_at_ts: null,
+      reincarnation: reincarnation ?? null,
+      updated_at_ts: updatedAt,
+      schema_version: adapter.schemaVersion,
+    };
+    ctx.manager.markDirty(row);
+  });
 };
 
 /**
@@ -89,22 +119,24 @@ export const publishReplicaDelete = async (kind: string, contentId: string): Pro
   if (!ctx) return;
   const adapter = getReplicaAdapter(kind);
   if (!adapter) return;
-  const userId = await getUserID();
-  if (!userId) return;
+  return preparePublication(kind, contentId, async () => {
+    const userId = await getUserID();
+    if (!userId) return;
 
-  const tombstoneHlc = ctx.hlc.next();
-  const baseRow: ReplicaRow = {
-    user_id: userId,
-    kind,
-    replica_id: contentId,
-    fields_jsonb: {},
-    manifest_jsonb: null,
-    deleted_at_ts: null,
-    reincarnation: null,
-    updated_at_ts: tombstoneHlc,
-    schema_version: adapter.schemaVersion,
-  };
-  ctx.manager.markDirty(removeReplica(baseRow, tombstoneHlc));
+    const tombstoneHlc = ctx.hlc.next();
+    const baseRow: ReplicaRow = {
+      user_id: userId,
+      kind,
+      replica_id: contentId,
+      fields_jsonb: {},
+      manifest_jsonb: null,
+      deleted_at_ts: null,
+      reincarnation: null,
+      updated_at_ts: tombstoneHlc,
+      schema_version: adapter.schemaVersion,
+    };
+    ctx.manager.markDirty(removeReplica(baseRow, tombstoneHlc));
+  });
 };
 
 /**
@@ -128,20 +160,22 @@ export const publishReplicaManifest = async (
   if (!ctx) return;
   const adapter = getReplicaAdapter(kind);
   if (!adapter) return;
-  const userId = await getUserID();
-  if (!userId) return;
+  return preparePublication(kind, contentId, async () => {
+    const userId = await getUserID();
+    if (!userId) return;
 
-  const updatedAt = ctx.hlc.next();
-  const row: ReplicaRow = {
-    user_id: userId,
-    kind,
-    replica_id: contentId,
-    fields_jsonb: {},
-    manifest_jsonb: { files, schemaVersion: 1 },
-    deleted_at_ts: null,
-    reincarnation: reincarnation ?? null,
-    updated_at_ts: updatedAt,
-    schema_version: adapter.schemaVersion,
-  };
-  ctx.manager.markDirty(row);
+    const updatedAt = ctx.hlc.next();
+    const row: ReplicaRow = {
+      user_id: userId,
+      kind,
+      replica_id: contentId,
+      fields_jsonb: {},
+      manifest_jsonb: { files, schemaVersion: 1 },
+      deleted_at_ts: null,
+      reincarnation: reincarnation ?? null,
+      updated_at_ts: updatedAt,
+      schema_version: adapter.schemaVersion,
+    };
+    ctx.manager.markDirty(row);
+  });
 };

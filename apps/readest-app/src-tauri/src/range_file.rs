@@ -244,10 +244,11 @@ mod tests {
 
     #[test]
     fn safe_path_accepts_absolute_traversal_free() {
-        assert!(is_safe_path(Path::new(
-            "/data/user/0/com.bilingify.readest/Readest/Books/a.epub"
-        )));
-        assert!(is_safe_path(Path::new("/书/堂吉诃德.mobi")));
+        let root = Path::new(if cfg!(windows) { "C:/" } else { "/" });
+        assert!(is_safe_path(
+            &root.join("data/user/0/com.bilingify.readest/Readest/Books/a.epub")
+        ));
+        assert!(is_safe_path(&root.join("书/堂吉诃德.mobi")));
     }
 
     #[test]

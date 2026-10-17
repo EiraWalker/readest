@@ -1,4 +1,5 @@
 import { useCustomTranslatorStore } from '@/store/customTranslatorStore';
+import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import { TranslationProvider } from '../types';
 import { createCustomTranslator } from '../custom';
 import { deeplProvider } from './deepl';
@@ -40,7 +41,10 @@ export const getTranslators = (): TranslationProvider[] => {
     .getState()
     .getAvailableTranslators()
     .map(createCustomTranslator);
-  return [...availableTranslators, ...custom];
+  const builtin = isPrivateS3Mode()
+    ? availableTranslators.filter((translator) => translator !== deeplTranslator)
+    : availableTranslators;
+  return [...builtin, ...custom];
 };
 
 export const getTranslator = (name: TranslatorName): TranslationProvider | undefined => {
