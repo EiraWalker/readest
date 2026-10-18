@@ -9,11 +9,13 @@ const h = vi.hoisted(() => ({
   auth: vi.fn<() => { user: { id: string } | null }>(),
   login: vi.fn(),
   router: { push: vi.fn() },
+  synced: vi.fn(() => false),
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => h.router }));
 vi.mock('@/context/EnvContext', () => ({ useEnv: () => ({ appService: null }) }));
 vi.mock('@/context/AuthContext', () => ({ useAuth: () => h.auth() }));
 vi.mock('@/hooks/useTranslation', () => ({ useTranslation: () => (text: string) => text }));
+vi.mock('@/hooks/useBookFileSynced', () => ({ useBookFileSynced: h.synced }));
 vi.mock('@/hooks/useResponsiveSize', () => ({ useResponsiveSize: (size: number) => size }));
 vi.mock('@/hooks/useMedianPageDurationSecs', () => ({
   useMedianPageDurationSecs: () => undefined,
@@ -46,6 +48,7 @@ const props = {
 
 beforeEach(() => {
   vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'false');
+  h.synced.mockReturnValue(false);
   h.auth.mockReturnValue({ user: null });
   useSettingsStore.setState((state) => ({
     settings: { ...state.settings, ...DEFAULT_SYSTEM_SETTINGS },
@@ -116,17 +119,35 @@ it('keeps standard signed-in download behavior', () => {
 it.each([
   'grid',
   'list',
-] as const)('keeps a visible upload action for an uploaded local book in %s', (mode) => {
+] as const)('keeps the verified cloud action clickable and restores upload after a change in %s', (mode) => {
   vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  h.synced.mockReturnValue(true);
   const local = { ...book, downloadedAt: 1 };
-  render(<BookItem {...props} mode={mode} book={local} />);
+  const { rerender } = render(<BookItem {...props} mode={mode} book={local} />);
   const button = screen.getByRole('button', { name: 'Upload Book' });
+  expect(button.getAttribute('title')).toBe('Synced');
   expect(button.querySelector('svg')).not.toBeNull();
+  const syncedIcon = button.querySelector('svg')!.innerHTML;
   fireEvent.click(button);
   expect(upload).toHaveBeenCalledWith(local);
   expect(props.showBookDetailsModal).not.toHaveBeenCalled();
   expect(h.router.push).not.toHaveBeenCalled();
   expect(h.login).not.toHaveBeenCalled();
+  h.synced.mockReturnValue(false);
+  rerender(<BookItem {...props} mode={mode} book={local} />);
+  const uploadButton = screen.getByRole('button', { name: 'Upload Book' });
+  expect(uploadButton.getAttribute('title')).toBeNull();
+  expect(uploadButton.querySelector('svg')!.innerHTML).not.toBe(syncedIcon);
+});
+
+it('shows the transfer percentage on the cover while upload is in progress', () => {
+  render(
+    <BookItem {...props} mode='grid' book={{ ...book, downloadedAt: 1 }} transferProgress={42} />,
+  );
+  const progress = screen.getByRole('progressbar', { name: 'Transferring {{title}}' });
+  expect(progress.textContent).toBe('42%');
+  expect(progress.getAttribute('aria-valuenow')).toBe('42');
+  expect(screen.queryByRole('button', { name: 'Upload Book' })).toBeNull();
 });
 
 it.each([

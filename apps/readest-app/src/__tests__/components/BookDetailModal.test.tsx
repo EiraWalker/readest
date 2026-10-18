@@ -5,6 +5,8 @@ import { Book } from '@/types/book';
 import BookDetailModal from '@/components/metadata/BookDetailModal';
 import { DropdownProvider } from '@/context/DropdownContext';
 
+vi.mock('@/hooks/useBookFileSynced', () => ({ useBookFileSynced: () => false }));
+
 vi.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => (s: string) => s,
 }));

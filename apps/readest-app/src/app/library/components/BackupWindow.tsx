@@ -12,6 +12,8 @@ import { useFileSelector } from '@/hooks/useFileSelector';
 import { useScreenWakeLock } from '@/hooks/useScreenWakeLock';
 import { restoreFromBackupZip, saveBackupFile } from '@/services/backupService';
 import { useLibraryStore } from '@/store/libraryStore';
+import { useSettingsStore } from '@/store/settingsStore';
+import { broadcastGlobalSettings } from '@/utils/settingsSync';
 import Dialog from '@/components/Dialog';
 
 export const setBackupDialogVisible = (visible: boolean) => {
@@ -47,6 +49,7 @@ export const BackupWindow: React.FC<BackupWindowProps> = ({ onPullLibrary }) => 
   const _ = useTranslation();
   const { appService } = useEnv();
   const { setLibrary } = useLibraryStore();
+  const { setSettings } = useSettingsStore();
   const { selectFiles } = useFileSelector(appService, _);
   const [isOpen, setIsOpen] = useState(false);
   const [status, setStatus] = useState<BackupStatus>('idle');
@@ -114,7 +117,11 @@ export const BackupWindow: React.FC<BackupWindowProps> = ({ onPullLibrary }) => 
       }
     } catch (error) {
       console.error('Backup failed:', error);
-      setErrorMessage(_('Backup failed: {{error}}', { error: String(error) }));
+      setErrorMessage(
+        _('Backup failed: {{error}}', {
+          error: error instanceof Error ? _(error.message) : String(error),
+        }),
+      );
       setStatus('error');
     }
   };
@@ -149,6 +156,11 @@ export const BackupWindow: React.FC<BackupWindowProps> = ({ onPullLibrary }) => 
       );
 
       const newLibrary = await appService.loadLibraryBooks();
+      if (settingsRestored) {
+        const restoredSettings = await appService.loadSettings();
+        setSettings(restoredSettings);
+        void broadcastGlobalSettings(restoredSettings);
+      }
       const booksCount = newLibrary.reduce((sum, book) => sum + (book.deletedAt ? 0 : 1), 0);
       setLibrary(newLibrary);
       setResult({
@@ -161,7 +173,11 @@ export const BackupWindow: React.FC<BackupWindowProps> = ({ onPullLibrary }) => 
       onPullLibrary(true);
     } catch (error) {
       console.error('Restore failed:', error);
-      setErrorMessage(_('Restore failed: {{error}}', { error: String(error) }));
+      setErrorMessage(
+        _('Restore failed: {{error}}', {
+          error: error instanceof Error ? _(error.message) : String(error),
+        }),
+      );
       setStatus('error');
     }
   };

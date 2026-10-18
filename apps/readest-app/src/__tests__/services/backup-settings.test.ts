@@ -245,7 +245,7 @@ describe('sanitizeSettingsForBackup - blacklist', () => {
 });
 
 describe('sanitizeSettingsForBackup - credentials', () => {
-  it('never exports S3 access keys even when other credentials are included', () => {
+  it('exports S3 keys only when credentials are included, without a device reference', () => {
     const settings = makeSettings({
       s3: {
         enabled: true,
@@ -253,11 +253,15 @@ describe('sanitizeSettingsForBackup - credentials', () => {
         bucket: 'readest',
         accessKeyId: 'local-only-access',
         secretAccessKey: 'local-only-secret',
+        credentialRef: 'readest-private-s3:local-reference',
       },
     });
     const out = sanitizeSettingsForBackup(settings, { includeCredentials: true });
-    expect(out.s3.accessKeyId).toBeUndefined();
-    expect(out.s3.secretAccessKey).toBeUndefined();
+    expect(out.s3.accessKeyId).toBe('local-only-access');
+    expect(out.s3.secretAccessKey).toBe('local-only-secret');
+    expect(out.s3.credentialRef).toBeUndefined();
+    expect(sanitizeSettingsForBackup(settings).s3.accessKeyId).toBeUndefined();
+    expect(sanitizeSettingsForBackup(settings).s3.secretAccessKey).toBeUndefined();
     expect(out.s3.bucket).toBe('readest');
   });
 

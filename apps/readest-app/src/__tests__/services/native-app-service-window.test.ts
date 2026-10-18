@@ -1,5 +1,7 @@
-import { describe, test, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, test, expect, vi } from 'vitest';
 import type { Book } from '@/types/book';
+import type { NativeAppService } from '@/services/nativeAppService';
+import { mkdir } from '@tauri-apps/plugin-fs';
 
 const osTypeMock = vi.fn().mockReturnValue('macos');
 const invokeMock = vi.fn<(command: string, args?: unknown) => Promise<unknown>>();
@@ -107,12 +109,79 @@ vi.mock('@/services/settingsService', () => ({
   saveSettings: vi.fn().mockResolvedValue(undefined),
 }));
 
+// These capability/path checks do not load documents or call the official cloud.
+vi.mock('@/services/cloudService', () => ({}));
+vi.mock('@/libs/document', () => ({ DocumentLoader: class {} }));
+vi.mock('@/utils/supabase', () => ({ supabase: {} }));
+
 async function loadServiceWithOS(os: 'macos' | 'windows' | 'linux' | 'ios' | 'android') {
   osTypeMock.mockReturnValue(os);
   vi.resetModules();
   const mod = await import('@/services/nativeAppService');
   return new mod.NativeAppService();
 }
+
+describe.each([
+  {
+    os: 'android',
+    execDir: '/system/bin',
+    settingsDir: '/tmp/app-config',
+    booksDir: '/tmp/app-data',
+  },
+  {
+    os: 'ios',
+    execDir: '/bundle/App.app',
+    settingsDir: '/tmp/app-config',
+    booksDir: '/tmp/app-data',
+  },
+  {
+    os: 'windows',
+    execDir: '/programs/readest',
+    settingsDir: '/programs/readest/ReadestPrivate',
+    booksDir: '/programs/readest/ReadestPrivate',
+  },
+] as const)('NativeAppService private S3 storage on $os', ({
+  os,
+  execDir,
+  settingsDir,
+  booksDir,
+}) => {
+  let service: NativeAppService;
+  beforeEach(async () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    vi.stubEnv('NEXT_PUBLIC_PORTABLE_APP', 'true');
+    vi.mocked(mkdir).mockImplementation(async (path) => {
+      if (String(path).startsWith('/system/') || String(path).startsWith('/bundle/')) {
+        throw new Error('Executable directory is read-only');
+      }
+    });
+    invokeMock.mockImplementation(async (command) =>
+      command === 'get_executable_dir' ? execDir : undefined,
+    );
+    service = await loadServiceWithOS(os);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    invokeMock.mockResolvedValue(undefined);
+    vi.mocked(mkdir).mockResolvedValue(undefined);
+  });
+
+  test('uses a writable data root and keeps settings separate from a chosen book root', async () => {
+    await expect(service.init()).resolves.toBeUndefined();
+    expect(service.isPortableApp).toBe(os === 'windows');
+    expect(await service.resolveFilePath('settings.json', 'Settings')).toBe(
+      `${settingsDir}/settings.json`,
+    );
+    expect(await service.fs.getPrefix('Books')).toBe(`${booksDir}/Readest/Books`);
+    await service.setCustomRootDir('/chosen/library');
+    expect(await service.resolveFilePath('settings.json', 'Settings')).toBe(
+      `${settingsDir}/settings.json`,
+    );
+    expect(service.localBooksDir).toBe('/chosen/library/Readest/Books');
+    expect(await service.fs.getPrefix('Cache')).toBe('/tmp/app-cache');
+  });
+});
 
 describe('NativeAppService canvas filter capability', () => {
   test('the Chromium platforms support canvas filters', async () => {

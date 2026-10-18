@@ -168,6 +168,7 @@ const DEVICE_LOCAL_BOOK_FIELDS = [
   'downloadedAt',
   'coverDownloadedAt',
   'absDownloadedAt',
+  'localFileSync',
 ] as const satisfies readonly (keyof Book)[];
 
 /** A copy of `book` safe to publish to — or adopt from — the shared index. */

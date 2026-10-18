@@ -3,6 +3,13 @@ import { AwsV4Signer } from 'aws4fetch';
 import { createS3Provider, type S3FetchFn } from '@/services/sync/providers/s3/S3Provider';
 import { FileSyncError } from '@/services/sync/file/provider';
 import { runSemanticContract } from '@/__tests__/services/sync/file/providerSemanticContract';
+import * as environment from '@/services/environment';
+import { tauriUpload } from '@/utils/transfer';
+
+vi.mock('@/utils/transfer', () => ({
+  tauriUpload: vi.fn(),
+  tauriDownload: vi.fn(),
+}));
 
 const config = {
   endpoint: 'https://acc.r2.cloudflarestorage.com',
@@ -83,7 +90,32 @@ runSemanticContract('S3Provider', () => {
 });
 
 describe('S3Provider — transport', () => {
-  test('hashes a 32 MiB response incrementally without buffering the body', async () => {
+  test('forwards native upload byte progress through the provider wrapper', async () => {
+    const platform = vi.spyOn(environment, 'isTauriAppPlatform').mockReturnValue(true);
+    const onProgress = vi.fn();
+    const progress = { progress: 64, total: 128, transferSpeed: 32 };
+    vi.mocked(tauriUpload).mockImplementationOnce(async (_url, _path, _method, report) => {
+      report?.(progress);
+      return 'OK';
+    });
+    try {
+      const h = makeS3();
+      expect(
+        await h.provider.uploadStream!('/Readest/books/h1/Book.epub', '/local/Book.epub', onProgress),
+      ).toBe(true);
+      expect(onProgress).toHaveBeenCalledWith(progress);
+      expect(tauriUpload).toHaveBeenCalledWith(
+        expect.stringContaining('X-Amz-Signature='),
+        '/local/Book.epub',
+        'PUT',
+        onProgress,
+      );
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  test('hashes a 32 MiB stream without buffering and reuses only a verified object version', async () => {
     const h = makeS3();
     let remaining = 512;
     const chunk = new Uint8Array(65536).fill(97);
@@ -94,13 +126,25 @@ describe('S3Provider — transport', () => {
           else controller.close();
         },
       }),
+      { headers: { etag: '"verified-version"' } },
     );
     const buffered = vi.spyOn(response, 'arrayBuffer');
     h.fetchMock.mockResolvedValueOnce(response);
     expect(await h.provider.readFileMD5!('/large-stream-md5.epub')).toBe(
       'bc3d7c2ff64219e33239f2e13c2d21db',
     );
+    expect(await h.provider.readFileMD5!('/large-stream-md5.epub', 'verified-version')).toBe(
+      'bc3d7c2ff64219e33239f2e13c2d21db',
+    );
     expect(buffered).not.toHaveBeenCalled();
+    expect(h.fetchMock).toHaveBeenCalledTimes(1);
+    h.fetchMock.mockResolvedValueOnce(
+      new Response('abd', { headers: { etag: '"changed-version"' } }),
+    );
+    expect(await h.provider.readFileMD5!('/large-stream-md5.epub', 'changed-version')).toBe(
+      '4911e516e5aa21d327512e0c8b197616',
+    );
+    expect(h.fetchMock).toHaveBeenCalledTimes(2);
   });
 
   test('preserves missing, authentication and interrupted-body outcomes without caching a partial digest', async () => {
@@ -128,37 +172,6 @@ describe('S3Provider — transport', () => {
     expect(await h.provider.readFileMD5!('/hash-failures.epub', 'interrupted')).toBe(
       '900150983cd24fb0d6963f7d28e17f72',
     );
-  });
-  test('computes a full content MD5 from a stream and reuses only a verified object version', async () => {
-    const h = makeS3();
-    expect(h.provider.readFileMD5).toBeTypeOf('function');
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode('a'));
-          controller.enqueue(new TextEncoder().encode('bc'));
-          controller.close();
-        },
-      }),
-      { headers: { etag: '"verified-version"' } },
-    );
-    const buffered = vi.spyOn(response, 'arrayBuffer');
-    h.fetchMock.mockResolvedValueOnce(response);
-    expect(await h.provider.readFileMD5!('/manual-stream-md5.epub', 'verified-version')).toBe(
-      '900150983cd24fb0d6963f7d28e17f72',
-    );
-    expect(await h.provider.readFileMD5!('/manual-stream-md5.epub', 'verified-version')).toBe(
-      '900150983cd24fb0d6963f7d28e17f72',
-    );
-    expect(buffered).not.toHaveBeenCalled();
-    expect(h.fetchMock).toHaveBeenCalledTimes(1);
-    h.fetchMock.mockResolvedValueOnce(
-      new Response('abd', { headers: { etag: '"changed-version"' } }),
-    );
-    expect(await h.provider.readFileMD5!('/manual-stream-md5.epub', 'changed-version')).toBe(
-      '4911e516e5aa21d327512e0c8b197616',
-    );
-    expect(h.fetchMock).toHaveBeenCalledTimes(2);
   });
   test('readText GETs the path-style object URL with a SigV4 authorization', async () => {
     const h = makeS3();

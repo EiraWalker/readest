@@ -1,6 +1,11 @@
 import clsx from 'clsx';
 import { useState } from 'react';
-import { MdCheckCircle, MdCheckCircleOutline, MdOutlineOfflinePin } from 'react-icons/md';
+import {
+  MdCheckCircle,
+  MdCheckCircleOutline,
+  MdOutlineCloudDone,
+  MdOutlineOfflinePin,
+} from 'react-icons/md';
 import {
   LiaCloudUploadAltSolid,
   LiaCloudDownloadAltSolid,
@@ -11,6 +16,7 @@ import {
 import { Book } from '@/types/book';
 import { useEnv } from '@/context/EnvContext';
 import { useSyncIdentity } from '@/hooks/useSyncIdentity';
+import { useBookFileSynced } from '@/hooks/useBookFileSynced';
 import { useRouter } from 'next/navigation';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -60,6 +66,7 @@ const BookItem: React.FC<BookItemProps> = ({
   const _ = useTranslation();
   const router = useRouter();
   const syncIdentity = useSyncIdentity();
+  const fileSynced = useBookFileSynced(book);
   const { appService } = useEnv();
   const { settings } = useSettingsStore();
   const showSpine = skeuomorphicCovers ?? settings.librarySkeuomorphicCovers;
@@ -324,6 +331,7 @@ const BookItem: React.FC<BookItemProps> = ({
                 (hasLocalFile || book.uploadedAt) && (
                   <button
                     aria-label={hasLocalFile ? _('Upload Book') : _('Download Book')}
+                    title={hasLocalFile && fileSynced ? _('Synced') : undefined}
                     className='show-cloud-button -m-2 p-2'
                     onPointerDown={(e) => e.stopPropagation()}
                     onKeyDown={(e) => {
@@ -342,7 +350,12 @@ const BookItem: React.FC<BookItemProps> = ({
                       }
                     }}
                   >
-                    {hasLocalFile && <LiaCloudUploadAltSolid size={iconSize15} />}
+                    {hasLocalFile &&
+                      (fileSynced ? (
+                        <MdOutlineCloudDone size={iconSize15} />
+                      ) : (
+                        <LiaCloudUploadAltSolid size={iconSize15} />
+                      ))}
                     {!hasLocalFile && <LiaCloudDownloadAltSolid size={iconSize15} />}
                   </button>
                 )}

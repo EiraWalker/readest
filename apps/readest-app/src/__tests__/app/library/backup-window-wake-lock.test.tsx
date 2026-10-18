@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   saveBackupFile: vi.fn(),
   restoreFromBackupZip: vi.fn(),
   selectFiles: vi.fn(),
+  setSettings: vi.fn(),
+  broadcastSettings: vi.fn(),
 }));
 
 vi.mock('@/hooks/useScreenWakeLock', () => ({ useScreenWakeLock: mocks.useScreenWakeLock }));
@@ -19,6 +21,10 @@ vi.mock('@/hooks/useFileSelector', () => ({
 vi.mock('@/store/libraryStore', () => ({
   useLibraryStore: () => ({ setLibrary: vi.fn() }),
 }));
+vi.mock('@/store/settingsStore', () => ({
+  useSettingsStore: () => ({ setSettings: mocks.setSettings }),
+}));
+vi.mock('@/utils/settingsSync', () => ({ broadcastGlobalSettings: mocks.broadcastSettings }));
 vi.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => (key: string, options?: Record<string, string | number>) => {
     if (!options) return key;
@@ -32,6 +38,7 @@ const appService = {
   isIOSApp: false,
   openFile: vi.fn(async () => new File([], 'backup.zip')),
   loadLibraryBooks: vi.fn(async () => []),
+  loadSettings: vi.fn(async () => ({ s3: { credentialRef: 'readest-private-s3:restored' } })),
 };
 
 vi.mock('@/context/EnvContext', () => ({
@@ -107,5 +114,27 @@ describe('BackupWindow screen wake lock (#6291)', () => {
       finishRestore({ booksAdded: 0, booksUpdated: 0 });
     });
     expect(lastWakeLockRequest()).toBe(false);
+  });
+
+  it('applies and broadcasts restored credentials before requesting a library sync', async () => {
+    mocks.selectFiles.mockResolvedValue({ files: [{ path: '/backup.zip' }] });
+    mocks.restoreFromBackupZip.mockResolvedValue({
+      booksAdded: 0,
+      booksUpdated: 0,
+      settingsRestored: true,
+    });
+    const pullLibrary = vi.fn();
+    render(<BackupWindow onPullLibrary={pullLibrary} />);
+    await act(async () => {
+      setBackupDialogVisible(true);
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore Library' }));
+    await waitFor(() => expect(pullLibrary).toHaveBeenCalledWith(true));
+    const restored = { s3: { credentialRef: 'readest-private-s3:restored' } };
+    expect(mocks.setSettings).toHaveBeenCalledWith(restored);
+    expect(mocks.broadcastSettings).toHaveBeenCalledWith(restored);
+    expect(mocks.setSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      pullLibrary.mock.invocationCallOrder[0]!,
+    );
   });
 });

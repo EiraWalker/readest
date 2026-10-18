@@ -1,12 +1,12 @@
-# Private S3 on Windows
+# Private S3 on Windows and Android
 
 This build uses a personal S3-compatible bucket for the library, replica data,
 resource bundles, reading statistics, and sync-passphrase metadata. It does not
 require a Readest account or a separate API/database deployment.
 
-The first supported target is Windows. A new library binds to one bucket; use a
-separate application data directory for another library. The normal build remains
-available with its existing account and provider behavior.
+A new library binds to one bucket; use a separate application data directory for
+another library. The normal build remains available with its existing account
+and provider behavior.
 
 ## Build and run
 
@@ -36,12 +36,28 @@ start "" /D "%~dp0" "%~dp0readest-private.exe"
 endlocal
 ```
 
+With the Android SDK, NDK and Java toolchain installed, build the ARM64 APK with:
+
+```powershell
+pnpm --filter @readest/readest-app tauri:android:private-s3
+```
+
+The Android package is **com.bilingify.readest.private**. It stores the library
+in its application sandbox and can coexist with the normal Android app.
+
 In Settings → Integrations → S3, configure the private bucket. Qiniu's North China
 region uses **cn-north-1** and **https://s3.cn-north-1.qiniucs.com**. Use the actual
 S3 bucket name shown by the provider. Credentials are entered separately on each
-device and stored in Windows Credential Manager; only a device-local reference
-is written to configuration. Private credentials are excluded from exports,
-backups, and settings replicas.
+device and stored in Windows Credential Manager or Android's native secure store;
+only a device-local reference is written to configuration. Settings replicas and
+default backups exclude these credentials.
+
+To move the connection and keys through Backup & Restore, select **Include
+account credentials** when creating the backup. This writes AK/SK into the
+unencrypted backup ZIP. Restoring into a fresh library, or the same configured
+space, creates a new local secure-store entry and refreshes the open windows.
+A library already bound to a different endpoint, bucket or region keeps its
+connection and keys. Device-local credential references are never exported.
 
 The first connection binds the library to that endpoint and bucket. To rotate
 credentials, disconnect and reconnect the same space with the replacement keys.

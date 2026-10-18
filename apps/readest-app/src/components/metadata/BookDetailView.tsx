@@ -3,6 +3,7 @@ import { isPrivateS3Mode } from '@/services/sync/privateS3';
 import React, { useState } from 'react';
 import {
   MdOutlineCloudDownload,
+  MdOutlineCloudDone,
   MdOutlineCloudUpload,
   MdOutlineDelete,
   MdOutlineDownloadForOffline,
@@ -18,6 +19,7 @@ import { openExternalUrl } from '@/utils/open';
 import { sanitizeHtml } from '@/utils/sanitize';
 import { getBookGoodreadsQuery, getGoodreadsSearchUrl } from '@/utils/goodreads';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useBookFileSynced } from '@/hooks/useBookFileSynced';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useDefaultBookshelfCovers } from '@/hooks/useDefaultBookshelfCovers';
 import { useEnv } from '@/context/EnvContext';
@@ -79,6 +81,7 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
   onMetadataValueClick,
 }) => {
   const _ = useTranslation();
+  const fileSynced = useBookFileSynced(book);
   const { envConfig } = useEnv();
   const { settings } = useSettingsStore();
   const { skeuomorphicCovers } = useDefaultBookshelfCovers();
@@ -163,8 +166,16 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
             )}
             {/* A feed book is fileless — there is nothing to push (#5307). */}
             {hasLocalFile && !isFeedBook(book) && !isAudiobook(book) && onUpload && (
-              <button onClick={onUpload} title={_('Upload to Cloud')}>
-                <MdOutlineCloudUpload className='fill-base-content' />
+              <button
+                onClick={onUpload}
+                aria-label={_('Upload to Cloud')}
+                title={fileSynced ? _('Synced') : _('Upload to Cloud')}
+              >
+                {fileSynced ? (
+                  <MdOutlineCloudDone className='fill-base-content' />
+                ) : (
+                  <MdOutlineCloudUpload className='fill-base-content' />
+                )}
               </button>
             )}
             {onDownloadOffline && !book.absDownloadedAt && (

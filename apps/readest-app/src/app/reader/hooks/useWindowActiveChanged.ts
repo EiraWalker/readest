@@ -26,7 +26,7 @@ async function activeChangedOther(onChange: ActiveCallback): Promise<Cleanup> {
   return () => document.removeEventListener('visibilitychange', handler);
 }
 
-export function useWindowActiveChanged(callback: ActiveCallback) {
+export function useWindowActiveChanged(callback: ActiveCallback, enabled = true) {
   const onActiveChanged = useRef<ActiveCallback>(callback);
   const { appService } = useEnv();
 
@@ -37,6 +37,7 @@ export function useWindowActiveChanged(callback: ActiveCallback) {
   }, [callback]);
 
   useEffect(() => {
+    if (!enabled) return;
     let isAlive = true;
     let unsub: Cleanup | undefined;
     const onChange = (isActive: boolean) => {
@@ -60,5 +61,5 @@ export function useWindowActiveChanged(callback: ActiveCallback) {
       isAlive = false;
       unsub?.();
     };
-  }, [subscribe]);
+  }, [subscribe, enabled]);
 }

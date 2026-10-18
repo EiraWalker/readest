@@ -662,7 +662,8 @@ export class NativeAppService extends BaseAppService {
         console.warn('[nativeAppService] is_updater_disabled failed:', err);
       }
     }
-    const privateRoot = isPrivateS3Mode() ? await join(execDir, 'ReadestPrivate') : undefined;
+    const privateRoot =
+      isPrivateS3Mode() && this.isDesktopApp ? await join(execDir, 'ReadestPrivate') : undefined;
     if (privateRoot) {
       await this.fs.createDir(privateRoot, 'None', true);
       this.isPortableApp = true;
@@ -672,8 +673,9 @@ export class NativeAppService extends BaseAppService {
         execDir: privateRoot,
       });
     } else if (
-      process.env['NEXT_PUBLIC_PORTABLE_APP'] ||
-      (await this.fs.exists(`${execDir}/${SETTINGS_FILENAME}`, 'None'))
+      this.isDesktopApp &&
+      (process.env['NEXT_PUBLIC_PORTABLE_APP'] ||
+        (await this.fs.exists(`${execDir}/${SETTINGS_FILENAME}`, 'None')))
     ) {
       this.isPortableApp = true;
       this.fs.resolvePath = getPathResolver({
@@ -825,7 +827,7 @@ export class NativeAppService extends BaseAppService {
       customRootDir,
       isPortable: this.isPortableApp,
       execDir:
-        isPrivateS3Mode() && this.execDir
+        isPrivateS3Mode() && this.isDesktopApp && this.execDir
           ? await join(this.execDir, 'ReadestPrivate')
           : this.execDir,
     });

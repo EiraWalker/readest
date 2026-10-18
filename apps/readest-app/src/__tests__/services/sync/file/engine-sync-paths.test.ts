@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import type { Book, BookConfig } from '@/types/book';
+import type { ProgressHandler } from '@/utils/transfer';
 import { FileSyncEngine } from '@/services/sync/file/engine';
 import { FileSyncError, type FileSyncProvider } from '@/services/sync/file/provider';
 import type { LocalStore } from '@/services/sync/file/localStore';
@@ -163,13 +164,17 @@ describe('FileSyncEngine.pushBookFile — streaming upload', () => {
       resolveLocalBookPath: async () => ({ path: '/local/x.epub', size: 100 }),
     });
 
-    const res = await new FileSyncEngine(provider, store).pushBookFile(makeBook('h1'));
+    const onProgress = vi.fn();
+    const res = await new FileSyncEngine(provider, store).pushBookFile(makeBook('h1'), {
+      onProgress,
+    });
 
     expect(res).toEqual({ uploaded: true });
     expect(uploadStream).toHaveBeenCalledTimes(1);
     expect(uploadStream).toHaveBeenCalledWith(
       expect.stringContaining('/Readest/books/h1/'),
       '/local/x.epub',
+      onProgress,
     );
   });
 
@@ -187,19 +192,30 @@ describe('FileSyncEngine.pushBookFile — streaming upload', () => {
   });
 
   test('retries the stream once before failing', async () => {
+    const onProgress = vi.fn();
+    const progress = { progress: 25, total: 100, transferSpeed: 25 };
     const uploadStream = vi
-      .fn<(remotePath: string, localPath: string) => Promise<boolean>>()
+      .fn<
+        (remotePath: string, localPath: string, onProgress?: ProgressHandler) => Promise<boolean>
+      >()
       .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true);
+      .mockImplementationOnce(async (_remote, _local, report) => {
+        report?.(progress);
+        return true;
+      });
     const provider = fakeProvider({ head: async () => null, uploadStream });
     const store = fakeStore({
       resolveLocalBookPath: async () => ({ path: '/local/x.epub', size: 100 }),
     });
 
-    const res = await new FileSyncEngine(provider, store).pushBookFile(makeBook('h1'));
+    const res = await new FileSyncEngine(provider, store).pushBookFile(makeBook('h1'), {
+      onProgress,
+    });
 
     expect(res).toEqual({ uploaded: true });
     expect(uploadStream).toHaveBeenCalledTimes(2);
+    expect(uploadStream.mock.calls.every((call) => call[2] === onProgress)).toBe(true);
+    expect(onProgress).toHaveBeenCalledWith(progress);
   });
 });
 

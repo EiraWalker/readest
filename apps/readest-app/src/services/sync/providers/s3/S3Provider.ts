@@ -381,10 +381,14 @@ class S3ProviderImpl {
    * the JS heap. Returns `false` on a swallowed failure (provider contract:
    * the engine re-ensures dirs and retries once, then throws).
    */
-  async uploadStream(remotePath: string, localPath: string): Promise<boolean> {
+  async uploadStream(
+    remotePath: string,
+    localPath: string,
+    onProgress?: ProgressHandler,
+  ): Promise<boolean> {
     try {
       const url = await this.presign(HTTP_PUT, remotePath);
-      await tauriUpload(url, localPath, 'PUT');
+      await tauriUpload(url, localPath, 'PUT', onProgress);
       return true;
     } catch {
       // Native network errors can include the presigned URL and signing key id.
@@ -506,9 +510,9 @@ export const createS3Provider = (
   };
 
   if (isTauriAppPlatform()) {
-    provider.uploadStream = async (remotePath, localPath) =>
+    provider.uploadStream = async (remotePath, localPath, onProgress) =>
       implementation()
-        .then((impl) => impl.uploadStream(remotePath, localPath))
+        .then((impl) => impl.uploadStream(remotePath, localPath, onProgress))
         .catch(() => false);
     provider.downloadStream = async (remotePath, localPath, onProgress) =>
       implementation()

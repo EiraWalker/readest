@@ -15,6 +15,11 @@ import { isSyncCategoryEnabled } from '@/services/sync/syncCategories';
 import { runFileBookDownload, runFileBookUpload } from '@/services/sync/file/runLibrarySync';
 import { getPrivateS3Identity, isPrivateS3Mode } from '@/services/sync/privateS3';
 import { resolveS3Credentials } from '@/services/sync/providers/s3/credentials';
+import {
+  captureBookFileSync,
+  clearBookFileSync,
+  confirmBookFileSync,
+} from '@/services/sync/file/bookFileSync';
 
 /**
  * One throttle runs per in-flight transfer, and every emit re-renders the
@@ -63,11 +68,11 @@ export const useBookTransferActions = (
    * event that re-armed the throttle would strand the cover behind a stale
    * overlay with its action button gone, permanently.
    */
-  const trackProgress = (bookHash: string) => {
+  const trackProgress = (bookHash: string, maxPercent?: number) => {
     let settled = false;
     const throttle = createProgressThrottle((progress: ProgressPayload) => {
       setBooksTransferProgress((prev) => {
-        const next = toProgressPercent(progress);
+        const next = Math.min(toProgressPercent(progress), maxPercent ?? Infinity);
         if (prev[bookHash] === next) return prev;
         return { ...prev, [bookHash]: next };
       });
@@ -122,10 +127,18 @@ export const useBookTransferActions = (
 
       // An explicit Upload must reach EVERY destination the user selected
       // (#5062), not just the first one.
-      const tracker = backends.length > 0 ? trackProgress(book.hash) : null;
+      // Sending every byte does not prove the server accepted the upload.
+      const tracker = backends.length > 0 ? trackProgress(book.hash, 99) : null;
       let pushed: Awaited<ReturnType<typeof runFileBookUpload>> = false;
       try {
-        if (backends.length > 0) pushed = await runFileBookUpload(envConfig, book);
+        if (tracker) {
+          if (isPrivateS3Mode()) await clearBookFileSync(envConfig, book);
+          const confirmation = isPrivateS3Mode()
+            ? await captureBookFileSync(envConfig, book)
+            : null;
+          pushed = await runFileBookUpload(envConfig, book, tracker.onProgress);
+          if (pushed && confirmation) await confirmBookFileSync(envConfig, book, confirmation);
+        }
       } finally {
         tracker?.done();
       }

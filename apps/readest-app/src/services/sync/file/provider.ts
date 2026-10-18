@@ -87,7 +87,11 @@ export interface FileSyncProvider {
    * failure. Absent on backends without a streaming primitive (e.g. web);
    * the engine then falls back to buffered {@link writeBinary}.
    */
-  uploadStream?(remotePath: string, localPath: string): Promise<boolean>;
+  uploadStream?(
+    remotePath: string,
+    localPath: string,
+    onProgress?: ProgressHandler,
+  ): Promise<boolean>;
   /**
    * Optional streaming download: GET `remotePath` straight to `localPath`.
    * Same ownership + fallback rules as {@link uploadStream}. When the backend

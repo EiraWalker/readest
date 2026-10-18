@@ -350,7 +350,10 @@ export class FileSyncEngine {
    */
   async pushBookFile(
     book: Book,
-    { verifyContent = false }: { verifyContent?: boolean } = {},
+    {
+      verifyContent = false,
+      onProgress,
+    }: { verifyContent?: boolean; onProgress?: ProgressHandler } = {},
   ): Promise<PushBookFileResult> {
     // ABS books stream from the server and never have a local file to push —
     // guard here too, not just in syncLibrary's needsFilePush, since this is
@@ -406,7 +409,7 @@ export class FileSyncEngine {
         await this.ensureDirs(dirs);
         let ok = false;
         try {
-          ok = await this.provider.uploadStream(path, src.path);
+          ok = await this.provider.uploadStream(path, src.path, onProgress);
         } catch (e) {
           // Authentication will not heal by retrying the same credentials.
           if (e instanceof FileSyncError && e.code === 'AUTH_FAILED') throw e;
@@ -415,7 +418,7 @@ export class FileSyncEngine {
           // Mirror the buffered path's one-shot retry: a parent may have been
           // recreated mid-PUT (409). Re-ensure directories and try once more.
           await this.ensureDirs(dirs);
-          ok = await this.provider.uploadStream(path, src.path);
+          ok = await this.provider.uploadStream(path, src.path, onProgress);
           if (!ok) throw new FileSyncError('Streaming upload failed', 'NETWORK');
         }
         return { uploaded: true };

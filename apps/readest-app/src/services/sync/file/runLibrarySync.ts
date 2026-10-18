@@ -199,6 +199,7 @@ export const runFileLibrarySyncPass = async (
 export const runFileBookUpload = async (
   envConfig: EnvConfigType,
   book: Book,
+  onProgress?: ProgressHandler,
 ): Promise<'uploaded' | 'remote-matches' | false> => {
   const backends = getActiveFileSyncBackends(useSettingsStore.getState().settings);
   let outcome: 'uploaded' | 'remote-matches' | false = false;
@@ -206,7 +207,7 @@ export const runFileBookUpload = async (
     try {
       const engine = await buildEngine(envConfig, kind);
       if (!engine) continue;
-      const result = await engine.pushBookFile(book, { verifyContent: true });
+      const result = await engine.pushBookFile(book, { verifyContent: true, onProgress });
       if (!result.uploaded && result.reason !== 'remote-matches') continue;
       if (result.uploaded) outcome = 'uploaded';
       else if (!outcome) outcome = 'remote-matches';

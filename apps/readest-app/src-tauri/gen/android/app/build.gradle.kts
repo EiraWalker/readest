@@ -48,6 +48,9 @@ android {
                 }
             ?: ""
         applicationId = "com.bilingify.readest"
+        if (System.getenv("NEXT_PUBLIC_PRIVATE_S3") == "true") {
+            applicationIdSuffix = ".private"
+        }
         minSdk = 26
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()

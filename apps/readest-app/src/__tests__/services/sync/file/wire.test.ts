@@ -115,9 +115,15 @@ describe('wire envelope (frozen)', () => {
     expect(legacy?.uploadedHashes).toBeUndefined();
   });
 
-  // An offline Audiobookshelf download lives on this device only (#6256).
-  test('stripDeviceLocalFields drops the offline-download stamp', () => {
-    const stripped = stripDeviceLocalFields({ ...book, format: 'ABS', absDownloadedAt: 7 });
+  // Download and file-content confirmations belong only to this device.
+  test('stripDeviceLocalFields drops offline-download and local file-sync stamps', () => {
+    const stripped = stripDeviceLocalFields({
+      ...book,
+      format: 'ABS',
+      absDownloadedAt: 7,
+      localFileSync: { scope: 'local-space', remotePath: '/Book.epub', md5: 'local-md5' },
+    });
     expect(stripped).not.toHaveProperty('absDownloadedAt');
+    expect(stripped).not.toHaveProperty('localFileSync');
   });
 });

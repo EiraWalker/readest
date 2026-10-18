@@ -232,8 +232,12 @@ describe('runFileBookUpload', () => {
   });
 
   test('pushes the book to every enabled backend', async () => {
-    expect(await runFileBookUpload(envConfig, makeBook('h1'))).toBe('uploaded');
+    const book = makeBook('h1');
+    const onProgress = vi.fn();
+    expect(await runFileBookUpload(envConfig, book, onProgress)).toBe('uploaded');
     expect(pushBookFile).toHaveBeenCalledTimes(2);
+    expect(pushBookFile).toHaveBeenNthCalledWith(1, book, { verifyContent: true, onProgress });
+    expect(pushBookFile).toHaveBeenNthCalledWith(2, book, { verifyContent: true, onProgress });
   });
 
   test('succeeds when at least one backend takes the book', async () => {

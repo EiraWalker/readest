@@ -1,6 +1,6 @@
 {
   "name": "@readest/readest-app",
-  "version": "0.12.16",
+  "version": "0.12.17",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "build:private-s3": "dotenv -v NEXT_PUBLIC_PRIVATE_S3=true -v NEXT_PUBLIC_APP_PLATFORM=tauri -e .env.tauri -- next build",
     "dev:private-s3": "dotenv -v NEXT_PUBLIC_PRIVATE_S3=true -v NEXT_PUBLIC_APP_PLATFORM=tauri -e .env.tauri -- next dev",
     "tauri:build:private-s3": "dotenv -v NEXT_PUBLIC_PRIVATE_S3=true -v NEXT_PUBLIC_APP_PLATFORM=tauri -e .env.tauri -- tauri build --config src-tauri/tauri.private-s3.conf.json --no-bundle",
+    "tauri:android:private-s3": "dotenv -v NEXT_PUBLIC_PRIVATE_S3=true -v NEXT_PUBLIC_APP_PLATFORM=tauri -e .env.tauri -- tauri android build --config src-tauri/tauri.private-s3.conf.json --config src-tauri/tauri.private-s3.android.conf.json --apk --target aarch64",
     "start": "dotenv -e .env.tauri -- next start",
     "dev-web": "dotenv -e .env.web -- next dev",
     "build-web": "dotenv -e .env.web -- next build",

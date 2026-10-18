@@ -7,7 +7,6 @@ import type { EnvConfigType } from '@/services/environment';
 import type { AppService } from '@/types/system';
 import { INDETERMINATE_PROGRESS, type ProgressHandler } from '@/utils/transfer';
 import { useSettingsStore } from '@/store/settingsStore';
-import { DEFAULT_SYSTEM_SETTINGS } from '@/services/constants';
 
 /**
  * Issue #5062 — cloud sync providers are independently selectable, so a
@@ -26,7 +25,13 @@ const routing = vi.hoisted(() => ({
 }));
 
 const runFileBookUpload = vi.hoisted(() =>
-  vi.fn<() => Promise<'uploaded' | 'remote-matches' | false>>(async () => 'uploaded'),
+  vi.fn(
+    async (
+      _envConfig: EnvConfigType,
+      _book: Book,
+      _onProgress?: ProgressHandler,
+    ): Promise<'uploaded' | 'remote-matches' | false> => 'uploaded',
+  ),
 );
 const runFileBookDownload = vi.hoisted(() =>
   vi.fn(
@@ -41,6 +46,12 @@ const queueUpload = vi.hoisted(() => vi.fn(() => 'transfer-1'));
 const queueDownload = vi.hoisted(() => vi.fn(() => 'transfer-1'));
 const resolveS3Credentials = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock('@/services/sync/providers/s3/credentials', () => ({ resolveS3Credentials }));
+const fileSync = vi.hoisted(() => ({ capture: vi.fn(), confirm: vi.fn(), clear: vi.fn() }));
+vi.mock('@/services/sync/file/bookFileSync', () => ({
+  captureBookFileSync: fileSync.capture,
+  confirmBookFileSync: fileSync.confirm,
+  clearBookFileSync: fileSync.clear,
+}));
 
 vi.mock('@/hooks/useTranslation', () => ({
   useTranslation:
@@ -109,36 +120,14 @@ const setup = (appService: AppService | null = null) => {
 beforeEach(() => {
   vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'false');
   vi.clearAllMocks();
+  fileSync.capture.mockReset().mockResolvedValue(null);
+  fileSync.confirm.mockReset().mockResolvedValue(undefined);
+  fileSync.clear.mockReset().mockResolvedValue(undefined);
   routing.readestEnabled = true;
   routing.booksSyncEnabled = true;
   routing.backends = [];
 });
 afterEach(() => vi.unstubAllEnvs());
-
-it('opens Integrations for a disabled private service without enabling or scheduling an upload', async () => {
-  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
-  routing.readestEnabled = false;
-  useSettingsStore.setState({
-    settings: {
-      ...useSettingsStore.getState().settings,
-      ...DEFAULT_SYSTEM_SETTINGS,
-      s3: { endpoint: '', bucket: '', enabled: false },
-    },
-    isSettingsDialogOpen: false,
-    requestedPanel: null,
-    requestedSubPage: 's3',
-  });
-  const { result } = setup();
-  expect(await result.current.handleBookUpload(makeBook())).toBe(false);
-  expect(useSettingsStore.getState()).toMatchObject({
-    isSettingsDialogOpen: true,
-    requestedPanel: 'Integrations',
-    requestedSubPage: null,
-    settings: { s3: { enabled: false } },
-  });
-  expect(runFileBookUpload).not.toHaveBeenCalled();
-  expect(queueUpload).not.toHaveBeenCalled();
-});
 
 it.each([
   { enabled: false },
@@ -146,7 +135,7 @@ it.each([
   { bucket: '' },
   { endpoint: 'http://s3.example.com' },
   { credentialRef: '' },
-])('opens Integrations for an incomplete private connection: %j', async (overrides) => {
+])('opens Integrations for a disabled or incomplete private connection: %j', async (overrides) => {
   vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
   routing.readestEnabled = false;
   routing.backends = ['s3'];
@@ -161,6 +150,8 @@ it.each([
   useSettingsStore.setState({
     settings: { ...useSettingsStore.getState().settings, s3 },
     isSettingsDialogOpen: false,
+    requestedPanel: null,
+    requestedSubPage: 's3',
   });
   const { result } = setup();
   expect(await result.current.handleBookUpload(makeBook())).toBe(false);
@@ -221,29 +212,82 @@ it('opens Integrations if the saved private credentials are unavailable on this 
 
 describe('useBookTransferActions upload routing (issue #5062)', () => {
   it('reports already synced when the file backend verifies unchanged content', async () => {
+    vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+    useSettingsStore.setState(({ settings }) => ({
+      settings: {
+        ...settings,
+        s3: {
+          ...settings.s3,
+          enabled: true,
+          endpoint: 'https://s3.example.com',
+          bucket: 'fixture',
+          region: 'cn-north-1',
+          credentialRef: 'readest-private-s3:fixture',
+        },
+      },
+    }));
     routing.readestEnabled = false;
     routing.backends = ['s3'];
+    const confirmation = {
+      scope: 'space',
+      remotePath: '/Readest/books/book-1/Title.epub',
+      md5: 'abc',
+    };
+    fileSync.capture.mockResolvedValueOnce(confirmation);
     runFileBookUpload.mockResolvedValueOnce('remote-matches');
     const dispatchSpy = vi.spyOn(eventDispatcher, 'dispatch');
     const { result, getProgress } = setup();
-    expect(await result.current.handleBookUpload(makeBook())).toBe(true);
+    const book = makeBook();
+    expect(await result.current.handleBookUpload(book)).toBe(true);
+    expect(fileSync.clear).toHaveBeenCalledWith(envConfig, book);
+    expect(fileSync.confirm).toHaveBeenCalledWith(envConfig, book, confirmation);
     expect(dispatchSpy).toHaveBeenCalledWith(
       'toast',
       expect.objectContaining({ message: 'Already synced: Title' }),
     );
     expect(getProgress()).toEqual({});
   });
-  it('reaches every enabled destination when Readest Cloud and a file backend are both on', async () => {
-    routing.readestEnabled = true;
-    routing.backends = ['gdrive'];
+  it('shows upload byte progress until the file backend settles, ignoring late events', async () => {
+    vi.useFakeTimers();
+    try {
+      routing.readestEnabled = true;
+      routing.backends = ['gdrive'];
+      let emit: ProgressHandler | undefined;
+      let release!: (outcome: 'uploaded') => void;
+      runFileBookUpload.mockImplementationOnce(
+        (_env, _book, onProgress) =>
+          new Promise((resolve) => {
+            emit = onProgress;
+            release = resolve;
+          }),
+      );
 
-    const { result } = setup();
-    const book = makeBook();
-    const ok = await result.current.handleBookUpload(book);
+      const { result, getProgress } = setup();
+      const book = makeBook();
+      const pending = result.current.handleBookUpload(book);
 
-    expect(runFileBookUpload).toHaveBeenCalledWith(envConfig, book);
-    expect(queueUpload).toHaveBeenCalledWith(book, 1);
-    expect(ok).toBe(true);
+      expect(emit).toBeTypeOf('function');
+      expect(getProgress()).toEqual({ [book.hash]: INDETERMINATE_PROGRESS });
+      emit!({ progress: 25, total: 100, transferSpeed: 0 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(getProgress()).toEqual({ [book.hash]: 25 });
+      emit!({ progress: 100, total: 100, transferSpeed: 0 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(getProgress()).toEqual({ [book.hash]: 99 });
+
+      release('uploaded');
+      const ok = await pending;
+
+      expect(runFileBookUpload).toHaveBeenCalledWith(envConfig, book, expect.any(Function));
+      expect(queueUpload).toHaveBeenCalledWith(book, 1);
+      expect(ok).toBe(true);
+      expect(getProgress()).toEqual({});
+      emit!({ progress: 100, total: 100, transferSpeed: 0 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(getProgress()).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('toasts "turn on a provider" and returns false when nothing is enabled', async () => {
@@ -293,27 +337,51 @@ describe('useBookTransferActions upload with Books sync off', () => {
     const book = makeBook();
     const ok = await result.current.handleBookUpload(book);
 
-    expect(runFileBookUpload).toHaveBeenCalledWith(envConfig, book);
+    expect(runFileBookUpload).toHaveBeenCalledWith(envConfig, book, expect.any(Function));
     expect(queueUpload).not.toHaveBeenCalled();
     expect(ok).toBe(true);
   });
 
   it('reports a failed file-backend upload instead of the Books sync hint', async () => {
-    routing.booksSyncEnabled = false;
-    routing.backends = ['gdrive'];
-    runFileBookUpload.mockResolvedValueOnce(false);
-    const dispatchSpy = vi.spyOn(eventDispatcher, 'dispatch');
+    vi.useFakeTimers();
+    try {
+      routing.booksSyncEnabled = false;
+      routing.backends = ['gdrive'];
+      let emit: ProgressHandler | undefined;
+      let release!: (outcome: false) => void;
+      runFileBookUpload.mockImplementationOnce(
+        (_env, _book, onProgress) =>
+          new Promise((resolve) => {
+            emit = onProgress;
+            release = resolve;
+          }),
+      );
+      const dispatchSpy = vi.spyOn(eventDispatcher, 'dispatch');
 
-    const { result } = setup();
-    const ok = await result.current.handleBookUpload(makeBook());
+      const { result, getProgress } = setup();
+      const book = makeBook();
+      const pending = result.current.handleBookUpload(book);
+      expect(emit).toBeTypeOf('function');
+      emit!({ progress: 100, total: 100, transferSpeed: 0 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(getProgress()).toEqual({ [book.hash]: 99 });
+      release(false);
+      const ok = await pending;
 
-    expect(ok).toBe(false);
-    const toastCalls = dispatchSpy.mock.calls.filter(([event]) => event === 'toast');
-    expect(toastCalls).toHaveLength(1);
-    expect(toastCalls[0]?.[1]).toMatchObject({
-      type: 'error',
-      message: 'Failed to upload book: Title',
-    });
+      expect(ok).toBe(false);
+      expect(getProgress()).toEqual({});
+      emit!({ progress: 100, total: 100, transferSpeed: 0 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(getProgress()).toEqual({});
+      const toastCalls = dispatchSpy.mock.calls.filter(([event]) => event === 'toast');
+      expect(toastCalls).toHaveLength(1);
+      expect(toastCalls[0]?.[1]).toMatchObject({
+        type: 'error',
+        message: 'Failed to upload book: Title',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -96,6 +96,13 @@ export interface ImportBookOptions {
   lookupIndex?: BookLookupIndex;
 }
 
+/** This device's last confirmed file content in one configured cloud space. */
+export interface BookFileSyncConfirmation {
+  scope: string;
+  remotePath: string;
+  md5: string;
+}
+
 export interface Book {
   // if Book is a remote book we just lazy load the book content via url
   url?: string;
@@ -144,6 +151,8 @@ export interface Book {
   fileSyncDeletionRequestedAt?: number | null;
 
   uploadedAt?: number | null;
+  /** Device-local confirmation; never published to peers. */
+  localFileSync?: BookFileSyncConfirmation;
   downloadedAt?: number | null;
   coverDownloadedAt?: number | null;
   // Field-level LWW timestamp for the cover, so a page-turn that wins whole-row

@@ -7,7 +7,10 @@ import { DropdownProvider } from '@/context/DropdownContext';
 
 const mocks = vi.hoisted(() => ({
   toDataUrl: vi.fn(async (url: string) => `data:image/png;base64,${url}`),
+  synced: vi.fn(() => false),
 }));
+
+vi.mock('@/hooks/useBookFileSynced', () => ({ useBookFileSynced: mocks.synced }));
 
 vi.mock('@/hooks/useTranslation', () => ({
   useTranslation: () => (s: string) => s,
@@ -72,7 +75,10 @@ vi.mock('next/image', () => ({
   },
 }));
 
-beforeEach(() => vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'false'));
+beforeEach(() => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'false');
+  mocks.synced.mockReturnValue(false);
+});
 afterEach(() => {
   cleanup();
   vi.unstubAllEnvs();
@@ -110,6 +116,17 @@ const renderView = (extra?: Partial<React.ComponentProps<typeof BookDetailView>>
 it('does not offer upload for a missing local file even if downloadedAt is stale', () => {
   const { queryByTitle } = renderView({ fileSize: null, onUpload: vi.fn() });
   expect(queryByTitle('Upload to Cloud')).toBeNull();
+});
+
+it('keeps the verified cloud action available to check and upload again', () => {
+  vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
+  mocks.synced.mockReturnValue(true);
+  const onUpload = vi.fn();
+  const { getByRole } = renderView({ onUpload });
+  const button = getByRole('button', { name: 'Upload to Cloud' });
+  expect(button.getAttribute('title')).toBe('Synced');
+  fireEvent.click(button);
+  expect(onUpload).toHaveBeenCalledOnce();
 });
 
 describe('BookDetailView delete dropdown layout', () => {

@@ -3,7 +3,12 @@ import type { Configuration, FileEntry, ZipWriter } from '@zip.js/zip.js';
 import { AppService, FileItem } from '@/types/system';
 import { EXTS } from '@/libs/document';
 import { isTauriAppPlatform } from '@/services/environment';
-import { isPrivateS3Mode } from '@/services/sync/privateS3';
+import { getPrivateS3Identity, isPrivateS3Mode } from '@/services/sync/privateS3';
+import {
+  clearS3Credentials,
+  resolveS3Credentials,
+  saveS3Credentials,
+} from '@/services/sync/providers/s3/credentials';
 import { Book, BookConfig, BookNote } from '@/types/book';
 import { SystemSettings } from '@/types/settings';
 import type { PageStatEvent, StatBook } from '@/types/statistics';
@@ -12,6 +17,7 @@ import { getBookDirOfPath, getLibraryFilename } from '@/utils/book';
 import { getAbsOfflineDir } from '@/utils/audiobook';
 import { stampBookConfigSchema } from '@/utils/serializer';
 import { configureZip } from '@/utils/zip';
+import { stubTranslation as _ } from '@/utils/misc';
 
 /** Book file extensions for identifying book files in backup directories. */
 const BOOK_EXTS = new Set(Object.values(EXTS));
@@ -78,9 +84,7 @@ export const BACKUP_SETTINGS_BLACKLIST = [
   's3.deviceId',
   's3.lastSyncedAt',
   's3.providerSelectedAt',
-  // S3 credentials and their native-store reference always stay on this device.
-  's3.accessKeyId',
-  's3.secretAccessKey',
+  // Native-store references are device-local, even when exporting the keys.
   's3.credentialRef',
   'icloud.deviceId',
   'icloud.lastSyncedAt',
@@ -116,7 +120,6 @@ export const BACKUP_SETTINGS_CREDENTIAL_FIELDS = [
   'pagebound.refreshToken',
   'pagebound.apiToken',
   'notion.accessToken',
-  // S3 keys are also always excluded by BACKUP_SETTINGS_BLACKLIST above.
   's3.accessKeyId',
   's3.secretAccessKey',
   'aiSettings.aiGatewayApiKey',
@@ -228,8 +231,10 @@ export function mergeRestoredSettings(
   const portableBackup = { ...backup };
   if (portableBackup.s3) {
     portableBackup.s3 = { ...portableBackup.s3 };
-    delete portableBackup.s3.accessKeyId;
-    delete portableBackup.s3.secretAccessKey;
+    if (isPrivateS3Mode()) {
+      delete portableBackup.s3.accessKeyId;
+      delete portableBackup.s3.secretAccessKey;
+    }
     delete portableBackup.s3.credentialRef;
     if (isPrivateS3Mode() && current.s3?.endpoint && current.s3.bucket) {
       // An existing library keeps its space even when a backup came from a peer.
@@ -357,9 +362,14 @@ async function collectBackupEntries(
   // (unless opted in) credential fields.
   try {
     const settings = await appService.loadSettings();
-    const sanitized = sanitizeSettingsForBackup(settings, options);
+    const snapshot =
+      options.includeCredentials && isPrivateS3Mode() && settings.s3?.credentialRef
+        ? { ...settings, s3: await resolveS3Credentials(settings.s3) }
+        : settings;
+    const sanitized = sanitizeSettingsForBackup(snapshot, options);
     texts.push({ name: SETTINGS_BACKUP_FILENAME, content: JSON.stringify(sanitized, null, 2) });
   } catch (error) {
+    if (options.includeCredentials) throw new Error(_('Unable to back up account credentials'));
     console.warn('Skipping settings backup:', error);
   }
 
@@ -731,14 +741,57 @@ export async function restoreFromBackupZip(
   let settingsRestored = false;
   const settingsEntry = fileEntries.find((e) => e.filename === SETTINGS_BACKUP_FILENAME);
   if (settingsEntry) {
+    let restoredCredentialRef: string | undefined;
+    let restoresCredentials = false;
     try {
       const data = await settingsEntry.getData!(new Uint8ArrayWriter());
       const backupSettings: Partial<SystemSettings> = JSON.parse(new TextDecoder().decode(data));
       const currentSettings = await appService.loadSettings();
-      await appService.saveSettings(mergeRestoredSettings(currentSettings, backupSettings));
+      const merged = mergeRestoredSettings(currentSettings, backupSettings);
+      const s3 = backupSettings.s3;
+      restoresCredentials = !!(
+        isPrivateS3Mode() &&
+        s3 &&
+        ('accessKeyId' in s3 || 'secretAccessKey' in s3)
+      );
+      if (restoresCredentials && s3) {
+        const backupSpace = getPrivateS3Identity({ ...merged, s3: { ...s3, enabled: true } });
+        const currentSpace = getPrivateS3Identity({
+          ...currentSettings,
+          s3: { ...currentSettings.s3, enabled: true },
+        });
+        const bound = currentSettings.s3?.endpoint && currentSettings.s3.bucket;
+        // Keep a bound library's space and keys together; never apply another space's keys.
+        if (!bound || (backupSpace === currentSpace && s3.region === currentSettings.s3.region)) {
+          if (
+            !backupSpace ||
+            typeof s3.accessKeyId !== 'string' ||
+            !s3.accessKeyId.trim() ||
+            typeof s3.secretAccessKey !== 'string' ||
+            !s3.secretAccessKey.trim()
+          ) {
+            throw new Error('Invalid S3 credentials in backup');
+          }
+          restoredCredentialRef = await saveS3Credentials({
+            accessKeyId: s3.accessKeyId,
+            secretAccessKey: s3.secretAccessKey,
+          });
+          merged.s3.credentialRef = restoredCredentialRef;
+        }
+      }
+      await appService.saveSettings(merged);
       settingsRestored = true;
-    } catch (error) {
-      console.warn('Failed to restore settings from backup:', error);
+      if (restoredCredentialRef && currentSettings.s3?.credentialRef) {
+        void clearS3Credentials(currentSettings.s3.credentialRef).catch(() => {});
+      }
+    } catch {
+      if (restoredCredentialRef) await clearS3Credentials(restoredCredentialRef).catch(() => {});
+      if (restoresCredentials) {
+        await reader.close();
+        throw new Error(_('Unable to restore settings and S3 credentials'));
+      }
+      // Parsing an invalid credentials snapshot can put raw keys in the JSON error message.
+      console.warn('Failed to restore settings from backup');
     }
   }
 

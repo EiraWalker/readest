@@ -1043,6 +1043,8 @@
   "Select Backup": "選擇備份",
   "Restore failed: {{error}}": "還原失敗：{{error}}",
   "Backup & Restore": "備份與還原",
+  "Unable to back up account credentials": "無法備份帳戶憑據",
+  "Unable to restore settings and S3 credentials": "無法還原設定與 S3 憑據",
   "Backup Library": "備份書庫",
   "Restore Library": "還原書庫",
   "Creating backup...": "正在建立備份...",
@@ -2555,5 +2557,6 @@
   "Available title, author, chapter, location and link.": "可用的書名、作者、章節、位置和連結。",
   "Only these two placeholders are replaced. No extra instructions are added.": "僅替換這兩個標識符，不會額外加入指令。",
   "Already synced: {{title}}": "已同步：{{title}}",
+  "Synced": "已同步",
   "Transferring {{title}}": "正在傳輸 {{title}}"
 }
