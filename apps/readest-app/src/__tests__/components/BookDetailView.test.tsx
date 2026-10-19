@@ -118,15 +118,16 @@ it('does not offer upload for a missing local file even if downloadedAt is stale
   expect(queryByTitle('Upload to Cloud')).toBeNull();
 });
 
-it('keeps the verified cloud action available to check and upload again', () => {
+it.each([true, false])('only allows upload when the file is not synced (synced: %s)', (synced) => {
   vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
-  mocks.synced.mockReturnValue(true);
+  mocks.synced.mockReturnValue(synced);
   const onUpload = vi.fn();
   const { getByRole } = renderView({ onUpload });
-  const button = getByRole('button', { name: 'Upload to Cloud' });
-  expect(button.getAttribute('title')).toBe('Synced');
+  const button = getByRole('button', { name: synced ? 'Synced' : 'Upload to Cloud' });
+  expect(button.hasAttribute('disabled')).toBe(synced);
+  expect(button.getAttribute('title')).toBe(synced ? 'Synced' : 'Upload to Cloud');
   fireEvent.click(button);
-  expect(onUpload).toHaveBeenCalledOnce();
+  expect(onUpload).toHaveBeenCalledTimes(synced ? 0 : 1);
 });
 
 describe('BookDetailView delete dropdown layout', () => {

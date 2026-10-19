@@ -119,25 +119,30 @@ it('keeps standard signed-in download behavior', () => {
 it.each([
   'grid',
   'list',
-] as const)('keeps the verified cloud action clickable and restores upload after a change in %s', (mode) => {
+] as const)('disables the synced cloud action and restores upload after a change in %s', (mode) => {
   vi.stubEnv('NEXT_PUBLIC_PRIVATE_S3', 'true');
   h.synced.mockReturnValue(true);
   const local = { ...book, downloadedAt: 1 };
   const { rerender } = render(<BookItem {...props} mode={mode} book={local} />);
-  const button = screen.getByRole('button', { name: 'Upload Book' });
+  const button = screen.getByTitle('Synced');
+  expect(button.hasAttribute('disabled')).toBe(true);
+  expect(button.getAttribute('aria-label')).toBe('Synced');
   expect(button.getAttribute('title')).toBe('Synced');
   expect(button.querySelector('svg')).not.toBeNull();
   const syncedIcon = button.querySelector('svg')!.innerHTML;
   fireEvent.click(button);
-  expect(upload).toHaveBeenCalledWith(local);
+  expect(upload).not.toHaveBeenCalled();
   expect(props.showBookDetailsModal).not.toHaveBeenCalled();
   expect(h.router.push).not.toHaveBeenCalled();
   expect(h.login).not.toHaveBeenCalled();
   h.synced.mockReturnValue(false);
   rerender(<BookItem {...props} mode={mode} book={local} />);
   const uploadButton = screen.getByRole('button', { name: 'Upload Book' });
+  expect(uploadButton.hasAttribute('disabled')).toBe(false);
   expect(uploadButton.getAttribute('title')).toBeNull();
   expect(uploadButton.querySelector('svg')!.innerHTML).not.toBe(syncedIcon);
+  fireEvent.click(uploadButton);
+  expect(upload).toHaveBeenCalledExactlyOnceWith(local);
 });
 
 it('shows the transfer percentage on the cover while upload is in progress', () => {

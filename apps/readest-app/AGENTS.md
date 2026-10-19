@@ -106,6 +106,19 @@ For every coding task, write the minimum code that solves the requested problem.
 - If a solution is much longer than necessary, simplify it before finishing.
 - Before shipping, ask: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
 
+### 执行效率与验证顺序
+
+按“最小真实闭环 → 定向回归 → 稳定后完整验收”的顺序推进。
+
+- **尽早验证关键风险。** 同步并发、覆盖、删除、重启恢复等行为，先在隔离的测试书库和配置中验证最小真实场景；需要桌面或云端才能暴露的问题，应在最终 Release 构建前验证。
+- **修复时保持反馈快速。** 先复现失败，再修改并运行相关测试及受影响的检查。纯文档变更检查内容和 diff；每个小改动不自动触发全量测试或 Release 构建。
+- **稳定后集中验收。** 核心流程和定向回归通过后，再执行任务要求的完整测试、Release 构建及最终产物验收。定向测试不能替代完整门禁。
+- **重型任务错开执行。** 同一机器上的 Release 构建、全量测试等高负载任务按资源情况串行安排；复用已启动的任务和日志，不重复启动，也不擅自中断其他会话的任务。
+- **复用有效证据。** 在现有验收记录中注明命令、范围、结果及对应代码状态或产物；未提交修改也要纳入版本判断。仅在相关改动、新失败或未解决的疑点使结果失效时重跑，交付结论须对应最终代码和产物。
+- **失败先诊断。** 保留准确错误和失败范围，确认原因后再运行必要检查；不靠重复运行碰通过，不通过增加超时、跳过测试或降低门禁掩盖失败。
+- **辅助工作服务于交付。** 优先复用脚本、测试夹具和报告，仅补齐必要的验收证据。验收通过且授权范围内的交付完成后结束，不继续扩展无关审计或重复检查。
+- **进度更新只讲关键信息。** 说明当前阻塞、已有证据和下一步如何解除阻塞；长任务复用当前运行状态，不高频重复轮询。
+
 ### i18n
 
 See [docs/i18n.md](docs/i18n.md) for the key-as-content translation approach, `stubTranslation` usage in non-React modules, and extraction workflow.

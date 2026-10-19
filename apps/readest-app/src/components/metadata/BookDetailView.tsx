@@ -168,8 +168,9 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
             {hasLocalFile && !isFeedBook(book) && !isAudiobook(book) && onUpload && (
               <button
                 onClick={onUpload}
-                aria-label={_('Upload to Cloud')}
+                aria-label={fileSynced ? _('Synced') : _('Upload to Cloud')}
                 title={fileSynced ? _('Synced') : _('Upload to Cloud')}
+                disabled={fileSynced}
               >
                 {fileSynced ? (
                   <MdOutlineCloudDone className='fill-base-content' />

@@ -330,8 +330,15 @@ const BookItem: React.FC<BookItemProps> = ({
                 !isAudiobook(book) &&
                 (hasLocalFile || book.uploadedAt) && (
                   <button
-                    aria-label={hasLocalFile ? _('Upload Book') : _('Download Book')}
+                    aria-label={
+                      hasLocalFile
+                        ? fileSynced
+                          ? _('Synced')
+                          : _('Upload Book')
+                        : _('Download Book')
+                    }
                     title={hasLocalFile && fileSynced ? _('Synced') : undefined}
+                    disabled={hasLocalFile && fileSynced}
                     className='show-cloud-button -m-2 p-2'
                     onPointerDown={(e) => e.stopPropagation()}
                     onKeyDown={(e) => {
